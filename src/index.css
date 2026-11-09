@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-serif: "Noto Serif KR", "Cormorant Garamond", Georgia, serif;
+    --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    color: #1c1917;
+    background-color: #fbf9f5;
+  }
+
+  h1, h2, h3, h4, .font-serif-kr {
+    font-family: var(--font-serif);
+  }
+}
+
+/* Custom serene breathing animations */
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(0.85);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
+.animate-breathe {
+  animation: breathe 8s ease-in-out infinite;
+}
+
+/* Bell ripple animation */
+@keyframes bellRipple {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.animate-bell-ripple {
+  animation: bellRipple 2.5s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+}
+
+/* Custom scrollbar for mind sharing board and transcripts */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d6cebe;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b8ad9b;
+}

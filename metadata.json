@@ -1,0 +1,6 @@
+{
+  "name": "산사 템플스테이 | Jungto Temple Stay",
+  "description": "전국 3대 도량(사회문화회관, 수련원, J 정사)과 5대 수행 프로그램(명상, 108배, 스님 법문, 도반들과 마음나누기, 산책)을 체험하는 고요한 안식처",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
