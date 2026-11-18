@@ -355,16 +355,16 @@ export class PlayerAvatar {
       // 1. Walking mode
       if (this.currentAction === 'poheng') {
         // Mindful Monastic Walking (차수 묵언 포행)
-        // Calm, measured steps with hands folded at abdomen (차수 자세)
+        // Calm, measured steps with hands folded in front at lower abdomen (차수 자세)
         this.walkCycle += delta * 5.2;
 
         const legAngle = Math.sin(this.walkCycle) * 0.38;
         this.legPivotL.rotation.set(legAngle, 0, 0);
         this.legPivotR.rotation.set(-legAngle, 0, 0);
 
-        // Chasu posture: Both hands clasped calmly in front of lower abdomen
-        this.armPivotL.rotation.set(0.68, 0.42, 0.35);
-        this.armPivotR.rotation.set(0.68, -0.42, -0.35);
+        // Chasu posture: Negative X brings hanging arms FORWARD (+Z) in front of abdomen
+        this.armPivotL.rotation.set(-0.68, -0.35, 0.38);
+        this.armPivotR.rotation.set(-0.68, 0.35, -0.38);
 
         // Slow calm vertical grounding
         this.pelvisGroup.position.y = 0.45 + Math.abs(Math.sin(this.walkCycle * 2)) * 0.03;
@@ -399,30 +399,30 @@ export class PlayerAvatar {
           this.cushionGroup.visible = true;
 
           // Lower body down onto cushion
-          this.pelvisGroup.position.y = THREE.MathUtils.damp(this.pelvisGroup.position.y, 0.15, 6, delta);
+          this.pelvisGroup.position.y = THREE.MathUtils.damp(this.pelvisGroup.position.y, 0.16, 6, delta);
 
-          // Fold legs horizontally in lotus posture (결가부좌)
-          this.legPivotL.rotation.set(1.35, 0.45, 0.55);
-          this.legPivotR.rotation.set(1.35, -0.45, -0.55);
+          // Fold legs forward (-X) and inward into lotus posture (결가부좌)
+          this.legPivotL.rotation.set(-1.35, -0.35, 0.45);
+          this.legPivotR.rotation.set(-1.35, 0.35, -0.45);
 
-          // Dhyana Mudra (선정인): Hands placed in lap, right palm in left, thumbs gently touching
-          this.armPivotL.rotation.set(0.72, 0.45, 0.32);
-          this.armPivotR.rotation.set(0.72, -0.45, -0.32);
+          // Dhyana Mudra (선정인): Negative X puts hands forward in lap
+          this.armPivotL.rotation.set(-0.75, -0.35, 0.38);
+          this.armPivotR.rotation.set(-0.75, 0.35, -0.38);
 
           // Deep mindful breathing motion (abdominal and torso expansion)
           const breath = Math.sin(this.actionTimer * 1.5) * 0.035;
           this.torsoGroup.scale.set(1 + breath, 1 + breath * 0.4, 1 + breath);
-          this.torsoGroup.rotation.set(0.05, 0, 0);
+          this.torsoGroup.rotation.set(0.04, 0, 0);
 
-          // Serene head tilt, eyes cast 45 degrees downward
-          this.headGroup.rotation.set(0.12 + breath * 0.3, 0, 0);
+          // Serene head tilt
+          this.headGroup.rotation.set(0.10 + breath * 0.3, 0, 0);
           break;
         }
 
         case 'bowing': {
           // ==========================================
-          // 🙏 108배 (108 Bows / 오체투지 참회 절)
-          // Complete Korean Buddhist 5-point prostration cycle (~5.4s cycle)
+          // 🙏 108배 (Hands raised to forehead -> Deep Prostration -> Rise)
+          // Negative arm X rotation raises arms FORWARD (+Z) and UP to the forehead (이마)
           // ==========================================
           this.cushionGroup.visible = false;
           this.torsoGroup.scale.set(1, 1, 1);
@@ -431,71 +431,75 @@ export class PlayerAvatar {
           const cycle = (this.actionTimer % bowDuration) / bowDuration;
 
           if (cycle < 0.22) {
-            // Phase 1: Standing in Hapjang (합장), knees beginning to bend
+            // Phase 1: Raise hands in front to touch the forehead (이마에 손을 대고), knees begin bending
             const t = cycle / 0.22;
             this.pelvisGroup.position.y = THREE.MathUtils.lerp(0.45, 0.32, t);
-            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(0, 0.2, t), 0, 0);
+            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(0, 0.15, t), 0, 0);
 
-            // Hapjang: Palms pressed together at chest
-            this.armPivotL.rotation.set(0.85, 0.55, 0.45);
-            this.armPivotR.rotation.set(0.85, -0.55, -0.45);
+            // Hands move from chest Hapjang (-1.25) smoothly up to forehead (-2.38, az = ±0.58)
+            const ax = THREE.MathUtils.lerp(-1.25, -2.38, t);
+            const az = THREE.MathUtils.lerp(0.68, 0.58, t);
+            this.armPivotL.rotation.set(ax, 0, az);
+            this.armPivotR.rotation.set(ax, 0, -az);
 
-            this.legPivotL.rotation.set(THREE.MathUtils.lerp(0, 0.5, t), 0, 0);
-            this.legPivotR.rotation.set(THREE.MathUtils.lerp(0, 0.5, t), 0, 0);
+            this.legPivotL.rotation.set(THREE.MathUtils.lerp(0, -0.45, t), 0, 0);
+            this.legPivotR.rotation.set(THREE.MathUtils.lerp(0, -0.45, t), 0, 0);
+            this.headGroup.rotation.set(0.12, 0, 0);
+          } else if (cycle < 0.50) {
+            // Phase 2: Kneeling and bowing deep forward while keeping hands touching forehead (이마에 손을 댄 채 절)
+            const t = (cycle - 0.22) / 0.28;
+            this.pelvisGroup.position.y = THREE.MathUtils.lerp(0.32, 0.12, t);
+            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(0.15, 1.38, t), 0, 0);
+
+            // Keep hands at forehead while bowing down
+            const ax = THREE.MathUtils.lerp(-2.38, -2.25, t);
+            this.armPivotL.rotation.set(ax, 0, 0.58);
+            this.armPivotR.rotation.set(ax, 0, -0.58);
+
+            // Legs kneel back smoothly
+            this.legPivotL.rotation.set(THREE.MathUtils.lerp(-0.45, 1.35, t), 0, 0);
+            this.legPivotR.rotation.set(THREE.MathUtils.lerp(-0.45, 1.35, t), 0, 0);
+            this.headGroup.rotation.set(THREE.MathUtils.lerp(0.12, 0.25, t), 0, 0);
+          } else if (cycle < 0.70) {
+            // Phase 3: Deep bow hold with hands at forehead / slight respectful lift
+            const t = (cycle - 0.50) / 0.20;
+            const pulse = Math.sin(t * Math.PI) * 0.12;
+
+            this.pelvisGroup.position.y = 0.12;
+            this.torsoGroup.rotation.set(1.38, 0, 0);
+
+            this.armPivotL.rotation.set(-2.25 - pulse, 0, 0.58);
+            this.armPivotR.rotation.set(-2.25 - pulse, 0, -0.58);
+
+            this.legPivotL.rotation.set(1.38, 0, 0);
+            this.legPivotR.rotation.set(1.38, 0, 0);
+            this.headGroup.rotation.set(0.25, 0, 0);
+          } else if (cycle < 0.88) {
+            // Phase 4: Rising up smoothly with hands still held respectfully at forehead
+            const t = (cycle - 0.70) / 0.18;
+            this.pelvisGroup.position.y = THREE.MathUtils.lerp(0.12, 0.34, t);
+            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(1.38, 0.18, t), 0, 0);
+
+            const ax = THREE.MathUtils.lerp(-2.25, -2.38, t);
+            this.armPivotL.rotation.set(ax, 0, 0.58);
+            this.armPivotR.rotation.set(ax, 0, -0.58);
+
+            this.legPivotL.rotation.set(THREE.MathUtils.lerp(1.38, -0.35, t), 0, 0);
+            this.legPivotR.rotation.set(THREE.MathUtils.lerp(1.38, -0.35, t), 0, 0);
             this.headGroup.rotation.set(0.15, 0, 0);
-          } else if (cycle < 0.48) {
-            // Phase 2: Kneeling down, bowing torso to the floor (오체투지: 두 무릎, 이마, 팔꿈치가 바닥에 닿음)
-            const t = (cycle - 0.22) / 0.26;
-            this.pelvisGroup.position.y = THREE.MathUtils.lerp(0.32, 0.1, t);
-            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(0.2, 1.48, t), 0, 0);
-
-            // Arms lower to touch the floor in front
-            this.armPivotL.rotation.set(THREE.MathUtils.lerp(0.85, 1.55, t), 0.15, 0.15);
-            this.armPivotR.rotation.set(THREE.MathUtils.lerp(0.85, 1.55, t), -0.15, -0.15);
-
-            this.legPivotL.rotation.set(1.4, 0, 0);
-            this.legPivotR.rotation.set(1.4, 0, 0);
-            this.headGroup.rotation.set(THREE.MathUtils.lerp(0.15, 0.45, t), 0, 0);
-          } else if (cycle < 0.68) {
-            // Phase 3: Jeopjokrye (접족례: 손바닥을 뒤집어 귀 옆으로 살짝 들어올려 부처님 발을 받드는 지극한 공경)
-            const t = (cycle - 0.48) / 0.20;
-            const lift = Math.sin(t * Math.PI) * 0.25;
-
-            this.pelvisGroup.position.y = 0.08;
-            this.torsoGroup.rotation.set(1.5, 0, 0);
-
-            // Palms raise slightly upward in Jeopjokrye
-            this.armPivotL.rotation.set(1.35 - lift, 0.45, 0.45);
-            this.armPivotR.rotation.set(1.35 - lift, -0.45, -0.45);
-
-            this.legPivotL.rotation.set(1.45, 0, 0);
-            this.legPivotR.rotation.set(1.45, 0, 0);
-            this.headGroup.rotation.set(0.5, 0, 0);
-          } else if (cycle < 0.86) {
-            // Phase 4: Palms back to ground, pushing torso up to kneeling
-            const t = (cycle - 0.68) / 0.18;
-            this.pelvisGroup.position.y = THREE.MathUtils.lerp(0.08, 0.32, t);
-            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(1.5, 0.25, t), 0, 0);
-
-            // Pushing up back to Hapjang
-            this.armPivotL.rotation.set(THREE.MathUtils.lerp(1.35, 0.85, t), 0.5, 0.4);
-            this.armPivotR.rotation.set(THREE.MathUtils.lerp(1.35, 0.85, t), -0.5, -0.4);
-
-            this.legPivotL.rotation.set(THREE.MathUtils.lerp(1.45, 0.5, t), 0, 0);
-            this.legPivotR.rotation.set(THREE.MathUtils.lerp(1.45, 0.5, t), 0, 0);
-            this.headGroup.rotation.set(0.2, 0, 0);
           } else {
-            // Phase 5: Rising back up to standing in Hapjang (합장)
-            const t = (cycle - 0.86) / 0.14;
-            this.pelvisGroup.position.y = THREE.MathUtils.lerp(0.32, 0.45, t);
-            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(0.25, 0, t), 0, 0);
+            // Phase 5: Standing tall, lowering hands from forehead back to chest Hapjang
+            const t = (cycle - 0.88) / 0.12;
+            this.pelvisGroup.position.y = THREE.MathUtils.lerp(0.34, 0.45, t);
+            this.torsoGroup.rotation.set(THREE.MathUtils.lerp(0.18, 0, t), 0, 0);
 
-            // Standing tall in Hapjang
-            this.armPivotL.rotation.set(0.85, 0.55, 0.45);
-            this.armPivotR.rotation.set(0.85, -0.55, -0.45);
+            const ax = THREE.MathUtils.lerp(-2.38, -1.25, t);
+            const az = THREE.MathUtils.lerp(0.58, 0.68, t);
+            this.armPivotL.rotation.set(ax, 0, az);
+            this.armPivotR.rotation.set(ax, 0, -az);
 
-            this.legPivotL.rotation.set(THREE.MathUtils.lerp(0.5, 0, t), 0, 0);
-            this.legPivotR.rotation.set(THREE.MathUtils.lerp(0.5, 0, t), 0, 0);
+            this.legPivotL.rotation.set(THREE.MathUtils.lerp(-0.35, 0, t), 0, 0);
+            this.legPivotR.rotation.set(THREE.MathUtils.lerp(-0.35, 0, t), 0, 0);
             this.headGroup.rotation.set(0.05, 0, 0);
           }
           break;
@@ -503,17 +507,17 @@ export class PlayerAvatar {
 
         case 'dharma': {
           // ==========================================
-          // 📿 법문 듣기 (Listening to Master Pomnyun's Dharma Talk)
-          // Palms in Hapjang (합장) with appreciative, awakened nodding
+          // 📿 법문 듣기 (Listening to Dharma Talk)
+          // Palms in Hapjang (합장) cleanly IN FRONT of chest
           // ==========================================
           this.cushionGroup.visible = false;
           this.pelvisGroup.position.y = THREE.MathUtils.damp(this.pelvisGroup.position.y, 0.45, 6, delta);
           this.torsoGroup.scale.set(1, 1, 1);
           this.torsoGroup.rotation.set(0.04, 0, 0);
 
-          // Hapjang prayer posture
-          this.armPivotL.rotation.set(0.85, 0.55, 0.45);
-          this.armPivotR.rotation.set(0.85, -0.55, -0.45);
+          // Hapjang prayer posture in front (-X)
+          this.armPivotL.rotation.set(-1.25, 0, 0.68);
+          this.armPivotR.rotation.set(-1.25, 0, -0.68);
 
           this.legPivotL.rotation.set(0, 0, 0);
           this.legPivotR.rotation.set(0, 0, 0);
@@ -528,16 +532,16 @@ export class PlayerAvatar {
         case 'poheng': {
           // ==========================================
           // 🌿 묵언 포행 (Mindful Walking - Stationary Pause)
-          // Standing calmly in Chasu posture (차수)
+          // Standing calmly in Chasu posture (차수) in front
           // ==========================================
           this.cushionGroup.visible = false;
           this.pelvisGroup.position.y = THREE.MathUtils.damp(this.pelvisGroup.position.y, 0.45, 6, delta);
           this.torsoGroup.scale.set(1, 1, 1);
           this.torsoGroup.rotation.set(0, 0, 0);
 
-          // Chasu posture: Both hands clasping in front of lower abdomen
-          this.armPivotL.rotation.set(0.68, 0.42, 0.35);
-          this.armPivotR.rotation.set(0.68, -0.42, -0.35);
+          // Chasu posture: Hands clasping cleanly in front of lower abdomen (-X)
+          this.armPivotL.rotation.set(-0.68, -0.35, 0.38);
+          this.armPivotR.rotation.set(-0.68, 0.35, -0.38);
 
           this.legPivotL.rotation.set(0, 0, 0);
           this.legPivotR.rotation.set(0, 0, 0);
@@ -550,19 +554,18 @@ export class PlayerAvatar {
         case 'mindsharing': {
           // ==========================================
           // 🍵 마음 나누기 (Mind Sharing with Fellow Practitioners)
-          // Seated warm posture with welcoming hand gestures and friendly head tilt
           // ==========================================
           this.cushionGroup.visible = true;
           this.pelvisGroup.position.y = THREE.MathUtils.damp(this.pelvisGroup.position.y, 0.18, 6, delta);
 
-          // Seated comfortably
-          this.legPivotL.rotation.set(1.3, 0.4, 0.4);
-          this.legPivotR.rotation.set(1.3, -0.4, -0.4);
+          // Seated comfortably (legs forward -X)
+          this.legPivotL.rotation.set(-1.3, -0.35, 0.4);
+          this.legPivotR.rotation.set(-1.3, 0.35, -0.4);
 
-          // Welcoming gesturing hands
+          // Welcoming gesturing hands in front (-X)
           const gesture = Math.sin(this.actionTimer * 1.5) * 0.12;
-          this.armPivotL.rotation.set(0.6 + gesture, 0.3, 0.25);
-          this.armPivotR.rotation.set(0.7 - gesture, -0.4, -0.3);
+          this.armPivotL.rotation.set(-0.65 - gesture, -0.3, 0.25);
+          this.armPivotR.rotation.set(-0.72 + gesture, 0.4, -0.3);
 
           this.torsoGroup.rotation.set(0.06, 0, Math.sin(this.actionTimer * 1.2) * 0.03);
           this.headGroup.rotation.set(0.05, Math.sin(this.actionTimer * 1.0) * 0.08, Math.sin(this.actionTimer * 1.4) * 0.06);
@@ -574,19 +577,18 @@ export class PlayerAvatar {
           // 🪑 연화정 원목 의자에 앉기 (Sitting on Chair)
           // ==========================================
           this.cushionGroup.visible = false;
-          // Position pelvis at chair cushion level
           this.pelvisGroup.position.y = THREE.MathUtils.damp(this.pelvisGroup.position.y, 0.42, 8, delta);
           this.torsoGroup.scale.set(1, 1, 1);
           this.torsoGroup.rotation.set(-0.06, 0, 0); // Resting comfortably against chair back
 
-          // Legs bent forward 90 degrees at hips and down to floor
-          this.legPivotL.rotation.set(1.57, 0, 0.05);
-          this.legPivotR.rotation.set(1.57, 0, -0.05);
+          // Legs bent forward (-1.57) 90 degrees at hips
+          this.legPivotL.rotation.set(-1.57, 0, 0.05);
+          this.legPivotR.rotation.set(-1.57, 0, -0.05);
 
-          // Hands resting comfortably near tea cup
+          // Hands resting forward near tea cup (-X)
           const teaGesture = Math.sin(this.actionTimer * 1.5) * 0.05;
-          this.armPivotL.rotation.set(0.72 + teaGesture, 0.25, 0.2);
-          this.armPivotR.rotation.set(0.72 - teaGesture, -0.25, -0.2);
+          this.armPivotL.rotation.set(-0.72 - teaGesture, -0.25, 0.2);
+          this.armPivotR.rotation.set(-0.72 + teaGesture, 0.25, -0.2);
 
           const breath = Math.sin(this.actionTimer * 1.4) * 0.015;
           this.headGroup.rotation.set(0.04 + breath, Math.sin(this.actionTimer * 0.7) * 0.04, 0);
@@ -605,9 +607,9 @@ export class PlayerAvatar {
           this.legPivotL.rotation.set(0, 0, 0);
           this.legPivotR.rotation.set(0, 0, 0);
 
-          // Arms resting naturally by the sides with slight curve
-          this.armPivotL.rotation.set(0.18, 0, 0.12);
-          this.armPivotR.rotation.set(0.18, 0, -0.12);
+          // Arms resting naturally by the sides slightly forward
+          this.armPivotL.rotation.set(-0.12, 0, 0.12);
+          this.armPivotR.rotation.set(-0.12, 0, -0.12);
 
           const idleBreath = Math.sin(this.actionTimer * 1.6) * 0.015;
           this.headGroup.rotation.set(idleBreath, 0, 0);

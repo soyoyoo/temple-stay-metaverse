@@ -75,8 +75,8 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
   const [newContent, setNewContent] = useState('');
   const [postSuccess, setPostSuccess] = useState(false);
 
-  // 5. Walking state
-  const [isWalkingPacing, setIsWalkingPacing] = useState(false);
+  // 5. Walking state (synced with global SoundEngine moktak pacer)
+  const [isWalkingPacing, setIsWalkingPacing] = useState(() => sound.isMoktakPacing());
   const [walkingTempoBpm, setWalkingTempoBpm] = useState(45);
   const [walkingSeconds, setWalkingSeconds] = useState(0);
   const [walkSound, setWalkSound] = useState<'breeze' | 'stream' | 'bamboo'>('breeze');
@@ -166,23 +166,32 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
     return () => clearInterval(talkTimer);
   }, [isTalkPlaying, talkSpeed, selectedTalk.durationSec]);
 
-  // Walking timer & moktak beat
+  // Sync global moktak pacer state & pause 108-bow auto loop if modal closes
   useEffect(() => {
-    let pacerTimer: NodeJS.Timeout;
+    const unsubscribe = sound.subscribe(() => {
+      setIsWalkingPacing(sound.isMoktakPacing());
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (programId !== 'bows108' && isAutoBow) {
+      setIsAutoBow(false);
+    }
+  }, [programId, isAutoBow]);
+
+  // Walking elapsed seconds counter while global moktak pacer is active
+  useEffect(() => {
     let secTimer: NodeJS.Timeout;
     if (isWalkingPacing) {
-      pacerTimer = setInterval(() => {
-        sound.playMoktak();
-      }, (60 / walkingTempoBpm) * 1000);
       secTimer = setInterval(() => {
         setWalkingSeconds((s) => s + 1);
       }, 1000);
     }
     return () => {
-      clearInterval(pacerTimer);
       clearInterval(secTimer);
     };
-  }, [isWalkingPacing, walkingTempoBpm]);
+  }, [isWalkingPacing]);
 
   if (!programId) return null;
 
@@ -636,7 +645,10 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
                   {[30, 45, 60].map((bpm) => (
                     <button
                       key={bpm}
-                      onClick={() => setWalkingTempoBpm(bpm)}
+                      onClick={() => {
+                        setWalkingTempoBpm(bpm);
+                        sound.setMoktakBpm(bpm);
+                      }}
                       className={`px-3 py-1 rounded text-xs ${
                         walkingTempoBpm === bpm ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600'
                       }`}
@@ -652,10 +664,9 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
                   onClick={() => {
                     if (!isWalkingPacing) {
                       sound.startAmbient(walkSound);
-                      setIsWalkingPacing(true);
+                      sound.startMoktakPacer(walkingTempoBpm);
                     } else {
-                      sound.stopAmbient();
-                      setIsWalkingPacing(false);
+                      sound.stopAllWalkingAudio();
                     }
                   }}
                   className="px-6 py-2.5 bg-stone-900 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 hover:bg-stone-800"
@@ -666,8 +677,7 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
 
                 <button
                   onClick={() => {
-                    setIsWalkingPacing(false);
-                    sound.stopAmbient();
+                    sound.stopAllWalkingAudio();
                     setWalkingSeconds(0);
                   }}
                   className="p-2.5 bg-stone-100 text-stone-700 rounded-lg hover:bg-stone-200"

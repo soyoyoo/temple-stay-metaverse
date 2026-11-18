@@ -8,6 +8,72 @@ class SoundEngine {
   private ctx: AudioContext | null = null;
   private ambientSource: AudioNode | null = null;
   private ambientGain: GainNode | null = null;
+  private moktakTimer: ReturnType<typeof setInterval> | null = null;
+  private isPacing = false;
+  private pacingBpm = 45;
+  private isAmbientOn = false;
+  private listeners: Set<() => void> = new Set();
+
+  public subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notify() {
+    this.listeners.forEach((cb) => cb());
+  }
+
+  public isMoktakPacing(): boolean {
+    return this.isPacing;
+  }
+
+  public isAmbientPlaying(): boolean {
+    return this.isAmbientOn;
+  }
+
+  public startMoktakPacer(bpm = 45) {
+    this.pacingBpm = bpm;
+    if (this.moktakTimer) {
+      clearInterval(this.moktakTimer);
+      this.moktakTimer = null;
+    }
+    this.isPacing = true;
+    this.playMoktak();
+    this.moktakTimer = setInterval(() => {
+      this.playMoktak();
+    }, (60 / this.pacingBpm) * 1000);
+    this.notify();
+  }
+
+  public setMoktakBpm(bpm: number) {
+    this.pacingBpm = bpm;
+    if (this.isPacing) {
+      if (this.moktakTimer) {
+        clearInterval(this.moktakTimer);
+      }
+      this.moktakTimer = setInterval(() => {
+        this.playMoktak();
+      }, (60 / this.pacingBpm) * 1000);
+    }
+  }
+
+  public stopMoktakPacer() {
+    if (this.moktakTimer) {
+      clearInterval(this.moktakTimer);
+      this.moktakTimer = null;
+    }
+    if (this.isPacing) {
+      this.isPacing = false;
+      this.notify();
+    }
+  }
+
+  public stopAllWalkingAudio() {
+    this.stopMoktakPacer();
+    this.stopAmbient();
+  }
 
   private initContext(): AudioContext {
     if (!this.ctx) {
@@ -191,28 +257,37 @@ class SoundEngine {
       whiteNoise.start();
       this.ambientSource = whiteNoise;
       this.ambientGain = gain;
+      this.isAmbientOn = true;
+      this.notify();
     } catch {
       // ignore
     }
   }
 
   public stopAmbient() {
-    if (this.ambientGain && this.ctx) {
+    const prevSource = this.ambientSource;
+    const prevGain = this.ambientGain;
+    this.ambientSource = null;
+    this.ambientGain = null;
+    if (this.isAmbientOn) {
+      this.isAmbientOn = false;
+      this.notify();
+    }
+    if (prevGain && this.ctx) {
       try {
-        this.ambientGain.gain.linearRampToValueAtTime(0.0001, this.ctx.currentTime + 0.8);
+        prevGain.gain.linearRampToValueAtTime(0.0001, this.ctx.currentTime + 0.5);
         setTimeout(() => {
-          if (this.ambientSource) {
+          if (prevSource) {
             try {
-              (this.ambientSource as AudioBufferSourceNode).stop();
-              this.ambientSource.disconnect();
+              (prevSource as AudioBufferSourceNode).stop();
+              prevSource.disconnect();
             } catch {
               // ignore
             }
-            this.ambientSource = null;
           }
-        }, 900);
+        }, 600);
       } catch {
-        this.ambientSource = null;
+        // ignore
       }
     }
   }

@@ -21,6 +21,8 @@ import {
   ChevronDown,
   ChevronUp,
   Users,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 
 interface MetaverseSceneProps {
@@ -45,6 +47,11 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const avatarRef = useRef<PlayerAvatar | null>(null);
 
   const [cameraMode, setCameraMode] = useState<'third' | 'first'>('third');
+  const cameraModeRef = useRef<'third' | 'first'>('third');
+  const [zoomPercent, setZoomPercent] = useState<number>(100);
+  const [isWalkingAudioActive, setIsWalkingAudioActive] = useState<boolean>(
+    () => sound.isMoktakPacing() || sound.isAmbientPlaying()
+  );
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [isControlsCollapsed, setIsControlsCollapsed] = useState(false);
   const [clickMoveFeedback, setClickMoveFeedback] = useState<string | null>(null);
@@ -62,6 +69,10 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const playerTargetPos = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 18));
   const playerTargetRotation = useRef<number>(0);
   const playerCurrentRotation = useRef<number>(0);
+  const cameraYawRef = useRef<number>(0);
+  const cameraPitchRef = useRef<number>(0.45);
+  const targetZoomRef = useRef<number>(1.0);
+  const currentZoomRef = useRef<number>(1.0);
   const keysPressed = useRef<{ [key: string]: boolean }>({});
   const hotspotsRef = useRef<InteractiveHotspot[]>([]);
   const collisionBoxesRef = useRef<CollisionBox[]>([]);
@@ -72,6 +83,26 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const walkTargetActionRef = useRef<AvatarActionType | null>(null);
   const walkTargetLabelRef = useRef<string | null>(null);
   const walkTargetHotspotRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    cameraModeRef.current = cameraMode;
+  }, [cameraMode]);
+
+  useEffect(() => {
+    const syncSoundState = () => {
+      setIsWalkingAudioActive(sound.isMoktakPacing() || sound.isAmbientPlaying());
+    };
+    syncSoundState();
+    return sound.subscribe(syncSoundState);
+  }, []);
+
+  const adjustZoom = useCallback((delta: number, reset = false) => {
+    const next = reset
+      ? 1.0
+      : THREE.MathUtils.clamp(targetZoomRef.current + delta, 0.5, 2.0);
+    targetZoomRef.current = next;
+    setZoomPercent(Math.round(next * 100));
+  }, []);
 
   // Continuous Mountain Terrain Height (산속으로 파묻히지 않고 산을 올라가게)
   const calculateMountainHeight = useCallback((x: number, z: number, templeId: string): number => {
@@ -367,6 +398,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+    renderer.domElement.style.touchAction = 'none';
     container.replaceChildren(renderer.domElement);
 
     // 4. Lighting Rig
@@ -529,36 +561,120 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       return false;
     };
 
-    // 11. Mouse Raycaster for Click-to-Move
+    // 11. Unified Pointer/Touch Raycaster, Drag-to-Turn & Pinch/Wheel Zoom
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
+    const canvas = renderer.domElement;
 
-    let pointerDownX = 0;
-    let pointerDownY = 0;
-    let isMouseDown = false;
-    let cameraYaw = 0;
+    interface TrackedPointer {
+      startX: number;
+      startY: number;
+      lastX: number;
+      lastY: number;
+      pointerType: string;
+    }
+    const activePointers = new Map<number, TrackedPointer>();
+    let maxDragDist = 0;
+    let wasMultiTouch = false;
+    let lastPinchDist = 0;
 
-    const handlePointerDown = (e: MouseEvent) => {
-      if ((e.target as HTMLElement).tagName !== 'CANVAS') return;
-      isMouseDown = true;
-      pointerDownX = e.clientX;
-      pointerDownY = e.clientY;
+    const getTwoPointerDistance = (): number => {
+      const pts = Array.from(activePointers.values());
+      if (pts.length < 2) return 0;
+      return Math.hypot(pts[0].lastX - pts[1].lastX, pts[0].lastY - pts[1].lastY);
     };
 
-    const handlePointerMove = (e: MouseEvent) => {
-      if (!isMouseDown) return;
-      const dx = e.clientX - pointerDownX;
-      cameraYaw -= dx * 0.005;
-      pointerDownX = e.clientX;
-      pointerDownY = e.clientY;
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.target !== canvas) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+      activePointers.set(e.pointerId, {
+        startX: e.clientX,
+        startY: e.clientY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        pointerType: e.pointerType,
+      });
+
+      if (activePointers.size === 1) {
+        maxDragDist = 0;
+        wasMultiTouch = false;
+        lastPinchDist = 0;
+      } else if (activePointers.size === 2) {
+        wasMultiTouch = true;
+        maxDragDist = 999; // Never trigger walk after multi-touch pinch
+        lastPinchDist = getTwoPointerDistance();
+      }
+
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore if unsupported
+      }
     };
 
-    const handlePointerUp = (e: MouseEvent) => {
-      if (!isMouseDown) return;
-      isMouseDown = false;
+    const handlePointerMove = (e: PointerEvent) => {
+      const ptr = activePointers.get(e.pointerId);
+      if (!ptr) return;
 
-      const dist = Math.hypot(e.clientX - pointerDownX, e.clientY - pointerDownY);
-      if (dist < 8 && container && groundMeshRef.current) {
+      if (activePointers.size === 1) {
+        const dx = e.clientX - ptr.lastX;
+        const dy = e.clientY - ptr.lastY;
+        const totalFromStart = Math.hypot(e.clientX - ptr.startX, e.clientY - ptr.startY);
+        maxDragDist = Math.max(maxDragDist, totalFromStart);
+
+        ptr.lastX = e.clientX;
+        ptr.lastY = e.clientY;
+
+        // Drag turns direction only — never triggers avatar movement
+        if (maxDragDist >= 3) {
+          const yawSpeed = ptr.pointerType === 'touch' ? 0.0075 : 0.0055;
+          const pitchSpeed = ptr.pointerType === 'touch' ? 0.0045 : 0.0035;
+          cameraYawRef.current -= dx * yawSpeed;
+          cameraPitchRef.current = THREE.MathUtils.clamp(
+            cameraPitchRef.current + dy * pitchSpeed,
+            0.12,
+            1.05
+          );
+        }
+      } else if (activePointers.size === 2) {
+        ptr.lastX = e.clientX;
+        ptr.lastY = e.clientY;
+
+        const currPinchDist = getTwoPointerDistance();
+        if (lastPinchDist > 12 && currPinchDist > 12) {
+          const scaleDelta = currPinchDist / lastPinchDist;
+          const nextZoom = THREE.MathUtils.clamp(targetZoomRef.current * scaleDelta, 0.5, 2.0);
+          targetZoomRef.current = nextZoom;
+          setZoomPercent(Math.round(nextZoom * 100));
+        }
+        lastPinchDist = currPinchDist;
+      }
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      const ptr = activePointers.get(e.pointerId);
+      activePointers.delete(e.pointerId);
+
+      try {
+        if (canvas.hasPointerCapture(e.pointerId)) {
+          canvas.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // ignore
+      }
+
+      if (activePointers.size === 1) {
+        lastPinchDist = 0;
+      }
+
+      if (!ptr || e.type !== 'pointerup' || wasMultiTouch || activePointers.size > 0) {
+        return;
+      }
+
+      const endDist = Math.hypot(e.clientX - ptr.startX, e.clientY - ptr.startY);
+      // Only a pure click/tap (< 8px total drag) moves the avatar! Drag-and-drop only turns direction.
+      if (endDist < 8 && maxDragDist < 8 && container && groundMeshRef.current) {
         const rect = container.getBoundingClientRect();
         mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -594,10 +710,17 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
             waypointMarkerRef.current.visible = true;
           }
 
-          // setClickMoveFeedback(`총총 걸어갑니다... (${targetX.toFixed(1)}, ${targetZ.toFixed(1)})`);
           setTimeout(() => setClickMoveFeedback(null), 2500);
         }
       }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * 0.0012);
+      const nextZoom = THREE.MathUtils.clamp(targetZoomRef.current * factor, 0.5, 2.0);
+      targetZoomRef.current = nextZoom;
+      setZoomPercent(Math.round(nextZoom * 100));
     };
 
     // Keyboard controls
@@ -614,6 +737,13 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         waypointQueueRef.current = [];
         setIsAutoWalking(false);
         setAutoWalkMessage(null);
+      }
+      if (key === '=' || key === '+') {
+        adjustZoom(0.15);
+      } else if (key === '-' || key === '_') {
+        adjustZoom(-0.15);
+      } else if (key === '0') {
+        adjustZoom(0, true);
       }
       if (key === 'f') {
         toggleSitOnChair();
@@ -634,9 +764,11 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       keysPressed.current[e.key.toLowerCase()] = false;
     };
 
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('mousemove', handlePointerMove);
-    window.addEventListener('mouseup', handlePointerUp);
+    canvas.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 
@@ -657,8 +789,8 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     function tick() {
       const delta = Math.min(clock.getDelta(), 0.1);
 
-      // Update cute novice monk practitioners
-      otherPractitioners.update(delta);
+      // Update fellow practitioners with terrain elevation so walkers never sink
+      otherPractitioners.update(delta, (x, z) => getSurfaceElevation(x, z, currentTempleId));
 
       // Check click-to-move distance
       const toTarget = new THREE.Vector3().subVectors(playerTargetPos.current, playerPos.current);
@@ -672,15 +804,15 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       if (keys['w'] || keys['arrowup']) kbZ -= 1;
       if (keys['s'] || keys['arrowdown']) kbZ += 1;
       if (keys['a'] || keys['arrowleft']) kbX -= 1;
-      if (keys['d'] || keys['arrowright']) kbZ += 1;
+      if (keys['d'] || keys['arrowright']) kbX += 1;
 
       const isKeyboardMoving = kbX !== 0 || kbZ !== 0;
       let isMoving = false;
 
       if (isKeyboardMoving) {
         const moveVec = new THREE.Vector2(kbX, kbZ).normalize();
-        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
-        const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYawRef.current);
+        const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYawRef.current);
 
         const deltaPos = new THREE.Vector3()
           .addScaledVector(forward, -moveVec.y)
@@ -829,17 +961,26 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         waypointMarkerRef.current.scale.set(pulse, 1, pulse);
       }
 
-      // Camera Follow (Smoothly tracks elevation Y + lookTarget Y in 4x spacious scale)
-      if (cameraMode === 'third') {
-        const camDistance = 9.5;
-        const camHeight = 4.6;
-        const targetCamX = playerPos.current.x + Math.sin(cameraYaw) * camDistance;
-        const targetCamZ = playerPos.current.z + Math.cos(cameraYaw) * camDistance;
-        const targetCamY = playerPos.current.y + camHeight;
+      // Smooth gradual Zoom damping (50% ~ 200%)
+      currentZoomRef.current = THREE.MathUtils.damp(currentZoomRef.current, targetZoomRef.current, 10, delta);
 
-        camera.position.x = THREE.MathUtils.damp(camera.position.x, targetCamX, 6, delta);
-        camera.position.y = THREE.MathUtils.damp(camera.position.y, targetCamY, 6, delta);
-        camera.position.z = THREE.MathUtils.damp(camera.position.z, targetCamZ, 6, delta);
+      // Camera Follow (Smoothly tracks elevation Y + zoom + yaw/pitch)
+      if (cameraModeRef.current === 'third') {
+        if (Math.abs(camera.fov - 50) > 0.1) {
+          camera.fov = THREE.MathUtils.damp(camera.fov, 50, 10, delta);
+          camera.updateProjectionMatrix();
+        }
+        const orbitRadius = 10.5 / currentZoomRef.current;
+        const camDistance = orbitRadius * Math.cos(cameraPitchRef.current);
+        const camHeight = Math.max(1.1, orbitRadius * Math.sin(cameraPitchRef.current));
+        const targetCamX = playerPos.current.x + Math.sin(cameraYawRef.current) * camDistance;
+        const targetCamZ = playerPos.current.z + Math.cos(cameraYawRef.current) * camDistance;
+        const terrainUnderCam = getSurfaceElevation(targetCamX, targetCamZ, currentTempleId);
+        const targetCamY = Math.max(playerPos.current.y + camHeight, terrainUnderCam + 1.1);
+
+        camera.position.x = THREE.MathUtils.damp(camera.position.x, targetCamX, 7, delta);
+        camera.position.y = THREE.MathUtils.damp(camera.position.y, targetCamY, 7, delta);
+        camera.position.z = THREE.MathUtils.damp(camera.position.z, targetCamZ, 7, delta);
 
         const lookTarget = new THREE.Vector3(
           playerPos.current.x,
@@ -848,12 +989,21 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         );
         camera.lookAt(lookTarget);
       } else {
+        const targetFov = THREE.MathUtils.clamp(55 / currentZoomRef.current, 27.5, 95);
+        if (Math.abs(camera.fov - targetFov) > 0.1) {
+          camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 10, delta);
+          camera.updateProjectionMatrix();
+        }
         camera.position.set(
           playerPos.current.x,
           playerPos.current.y + 1.45,
           playerPos.current.z
         );
-        const lookDir = new THREE.Vector3(0, 0, -10).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+        const pitchOffset = (0.45 - cameraPitchRef.current) * 6.0;
+        const lookDir = new THREE.Vector3(0, pitchOffset, -10).applyAxisAngle(
+          new THREE.Vector3(0, 1, 0),
+          cameraYawRef.current
+        );
         camera.lookAt(playerPos.current.clone().add(lookDir));
       }
 
@@ -891,15 +1041,17 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     return () => {
       avatarRef.current = null;
       cancelAnimationFrame(frameId);
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('mousemove', handlePointerMove);
-      window.removeEventListener('mouseup', handlePointerUp);
+      canvas.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+      canvas.removeEventListener('wheel', handleWheel);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
     };
-  }, [currentTempleId, cameraMode]);
+  }, [currentTempleId]);
 
   const templeTitles = {
     mungyeong: {
@@ -919,9 +1071,25 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   // Synchronize avatar animation with opened program modal or deliberate user choice
   useEffect(() => {
     if (activeModal === 'meditation') {
+      if (Math.hypot(playerPos.current.x - (-48), playerPos.current.z) < 25 && avatarRef.current) {
+        playerPos.current.set(-48, 0.88, 0);
+        playerTargetPos.current.copy(playerPos.current);
+        playerTargetRotation.current = Math.PI / 2;
+        playerCurrentRotation.current = Math.PI / 2;
+        avatarRef.current.mesh.position.copy(playerPos.current);
+        avatarRef.current.mesh.rotation.y = Math.PI / 2;
+      }
       setAvatarAction('meditating');
       avatarRef.current?.setAction('meditating');
     } else if (activeModal === 'bows108') {
+      if (Math.hypot(playerPos.current.x - 48, playerPos.current.z) < 25 && avatarRef.current) {
+        playerPos.current.set(48, 0.75, 0);
+        playerTargetPos.current.copy(playerPos.current);
+        playerTargetRotation.current = -Math.PI / 2;
+        playerCurrentRotation.current = -Math.PI / 2;
+        avatarRef.current.mesh.position.copy(playerPos.current);
+        avatarRef.current.mesh.rotation.y = -Math.PI / 2;
+      }
       setAvatarAction('bowing');
       avatarRef.current?.setAction('bowing');
     } else if (activeModal === 'dharma') {
@@ -945,7 +1113,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     <div className="relative w-screen h-screen bg-stone-950 overflow-hidden select-none">
       
       {/* 3D WebGL Canvas */}
-      <div ref={mountRef} className="w-full h-full cursor-crosshair" />
+      <div ref={mountRef} className="w-full h-full cursor-crosshair touch-none" />
 
       {/* Top Left: 3D Sanctuary HUD Status & Sanctuary Switcher */}
       <div className="absolute top-4 left-4 z-20 pointer-events-auto">
@@ -992,19 +1160,58 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         </div>
       </div>
 
-      {/* Top Right: View Controls, Bell strike, Booking & Help */}
-      <div className="absolute top-4 right-4 z-20 flex items-center gap-2 pointer-events-auto">
+      {/* Top Right: Zoom, Global Moktak Off, View Controls, Bell strike, Booking & Help */}
+      <div className="absolute top-4 right-4 z-20 flex flex-wrap justify-end items-center gap-1.5 sm:gap-2 max-w-[60vw] sm:max-w-none pointer-events-auto">
+        {isWalkingAudioActive && (
+          <button
+            onClick={() => sound.stopAllWalkingAudio()}
+            className="px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/70 rounded-xl text-xs font-serif font-semibold flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
+            title="포행 목탁 및 자연 소리 끄기"
+          >
+            <VolumeX className="w-4 h-4" />
+            <span>목탁 끄기</span>
+          </button>
+        )}
+
+        {/* Gradual Zoom In / Out (50% ~ 200%) for Smartphone & PC */}
+        <div className="flex items-center bg-stone-950/85 border border-stone-700/70 rounded-xl overflow-hidden shadow-md">
+          <button
+            onClick={() => adjustZoom(-0.15)}
+            disabled={zoomPercent <= 50}
+            className="p-2 text-stone-200 hover:bg-stone-800 disabled:opacity-40 transition-colors"
+            title="화면 축소 (최소 50%)"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => adjustZoom(0, true)}
+            className="px-2 py-1.5 text-[11px] font-mono text-amber-300 hover:bg-stone-800 border-x border-stone-800 min-w-[46px] text-center"
+            title="기본 배율(100%)로 복원"
+          >
+            {zoomPercent}%
+          </button>
+          <button
+            onClick={() => adjustZoom(0.15)}
+            disabled={zoomPercent >= 200}
+            className="p-2 text-stone-200 hover:bg-stone-800 disabled:opacity-40 transition-colors"
+            title="화면 확대 (최대 200%)"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+        </div>
+
         <button
           onClick={() => setActiveModal('booking')}
-          className="px-3.5 py-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-serif font-semibold rounded-xl text-xs flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
+          className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-serif font-semibold rounded-xl text-xs flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
         >
           <Calendar className="w-4 h-4 text-stone-900" />
-          <span>템플스테이 신청</span>
+          <span className="hidden sm:inline">템플스테이 신청</span>
+          <span className="sm:hidden">예약</span>
         </button>
 
         <button
           onClick={() => setCameraMode(cameraMode === 'third' ? 'first' : 'third')}
-          className="p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1 font-sans"
+          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1 font-sans"
           title="시점 변경"
         >
           <Eye className="w-4 h-4 text-stone-400" />
@@ -1013,7 +1220,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
         <button
           onClick={() => sound.playTempleGong()}
-          className="p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
+          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
           title="범종 타종"
         >
           <Volume2 className="w-4 h-4 text-amber-400" />
@@ -1022,7 +1229,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
         <button
           onClick={() => setShowHelpModal(true)}
-          className="p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
+          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
           title="조작 안내"
         >
           <HelpCircle className="w-4 h-4 text-stone-400" />
@@ -1163,6 +1370,44 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
                   onClick={() => {
                     if (act.id === 'sitting') {
                       toggleSitOnChair();
+                    } else if (act.id === 'meditating') {
+                      if (isSittingOnChairRef.current) {
+                        isSittingOnChairRef.current = false;
+                        setIsSittingOnChair(false);
+                      }
+                      const distToMedHall = Math.hypot(playerPos.current.x - (-48), playerPos.current.z);
+                      if (distToMedHall <= 30 && avatarRef.current) {
+                        playerPos.current.set(-48, 0.88, 0);
+                        playerTargetPos.current.copy(playerPos.current);
+                        playerTargetRotation.current = Math.PI / 2;
+                        playerCurrentRotation.current = Math.PI / 2;
+                        avatarRef.current.mesh.position.copy(playerPos.current);
+                        avatarRef.current.mesh.rotation.y = Math.PI / 2;
+                        setAvatarAction('meditating');
+                        avatarRef.current.setAction('meditating');
+                        sound.playSingingBowl();
+                      } else {
+                        walkToLocation('meditation');
+                      }
+                    } else if (act.id === 'bowing') {
+                      if (isSittingOnChairRef.current) {
+                        isSittingOnChairRef.current = false;
+                        setIsSittingOnChair(false);
+                      }
+                      const distToBowsHall = Math.hypot(playerPos.current.x - 48, playerPos.current.z);
+                      if (distToBowsHall <= 30 && avatarRef.current) {
+                        playerPos.current.set(48, 0.75, 0);
+                        playerTargetPos.current.copy(playerPos.current);
+                        playerTargetRotation.current = -Math.PI / 2;
+                        playerCurrentRotation.current = -Math.PI / 2;
+                        avatarRef.current.mesh.position.copy(playerPos.current);
+                        avatarRef.current.mesh.rotation.y = -Math.PI / 2;
+                        setAvatarAction('bowing');
+                        avatarRef.current.setAction('bowing');
+                        sound.playMoktak();
+                      } else {
+                        walkToLocation('bows108');
+                      }
                     } else {
                       if (isSittingOnChairRef.current) {
                         isSittingOnChairRef.current = false;
@@ -1313,9 +1558,16 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
               </div>
 
               <div className="flex justify-between items-center p-2.5 bg-stone-100 rounded-lg">
-                <span className="font-medium">카메라 시점 회전</span>
+                <span className="font-medium">방향 전환 (이동 없이 시선 회전)</span>
                 <span className="font-mono bg-white px-2 py-1 rounded border border-stone-300 font-semibold">
-                  마우스 드래그 / 터치 스와이프
+                  마우스 / 손가락 드래그
+                </span>
+              </div>
+
+              <div className="flex justify-between items-center p-2.5 bg-stone-100 rounded-lg">
+                <span className="font-medium">화면 확대 / 축소 (50% ~ 200%)</span>
+                <span className="font-mono bg-white px-2 py-1 rounded border border-stone-300 font-semibold">
+                  휠 / 두 손가락 핀치 / - +
                 </span>
               </div>
 

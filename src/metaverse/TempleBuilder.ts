@@ -509,9 +509,9 @@ export class TempleBuilder {
     const cushionMat = new THREE.MeshStandardMaterial({ color: 0x8a7e6b, roughness: 0.9 });
     const centerCushionMat = new THREE.MeshStandardMaterial({ color: 0xa38d6d, roughness: 0.85 });
 
-    for (let r = -10; r <= 10; r += 4.5) {
-      for (let c = -8; c <= 8; c += 4.5) {
-        const isCenter = Math.abs(r) < 1 && Math.abs(c) < 1;
+    for (let r = -9; r <= 9; r += 4.5) {
+      for (let c = -9; c <= 9; c += 4.5) {
+        const isCenter = Math.abs(r) < 0.5 && Math.abs(c) < 0.5;
         const cushion = new THREE.Mesh(cushionGeo, isCenter ? centerCushionMat : cushionMat);
         cushion.position.set(c, 0.88, r);
         hall.add(cushion);
@@ -625,9 +625,9 @@ export class TempleBuilder {
     const matColor = new THREE.MeshStandardMaterial({ color: 0x9e8e78, roughness: 0.85 });
     const centerMatColor = new THREE.MeshStandardMaterial({ color: 0xb39c7b, roughness: 0.8 });
 
-    for (let c = -7; c <= 7; c += 4.5) {
-      for (let r = -10; r <= 10; r += 5.0) {
-        const isCenter = Math.abs(c) < 1 && Math.abs(r) < 1;
+    for (let c = -8; c <= 8; c += 4) {
+      for (let r = -10; r <= 10; r += 5) {
+        const isCenter = Math.abs(c) < 0.5 && Math.abs(r) < 0.5;
         const mat = new THREE.Mesh(matGeo, isCenter ? centerMatColor : matColor);
         mat.position.set(c, 0.74, r);
         hall.add(mat);
