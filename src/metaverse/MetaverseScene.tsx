@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { TempleBuilder, InteractiveHotspot, CollisionBox } from './TempleBuilder';
+import { createWarmBuddhaStudioEnvMap } from './BuddhaStatueBuilder';
 import { PlayerAvatar, AvatarActionType } from './PlayerAvatar';
 import { OtherPractitionersManager } from './OtherPractitioners';
 import { RemotePlayersManager } from './RemotePlayersManager';
@@ -627,13 +628,15 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     renderer.domElement.style.touchAction = 'none';
     container.replaceChildren(renderer.domElement);
 
-    // Environment IBL reflection map (enhances antique gilt-bronze Buddha statue sheen)
+    // Environment IBL reflection map (RoomEnvironment for courtyard + warm studio IBL for golden Buddha)
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const roomEnv = new RoomEnvironment();
     const envRenderTarget = pmremGenerator.fromScene(roomEnv, 0.04);
     scene.environment = envRenderTarget.texture;
     roomEnv.dispose();
     pmremGenerator.dispose();
+
+    const buddhaEnvTarget = createWarmBuddhaStudioEnvMap(renderer);
 
     // 4. Lighting Rig
     const sunLight = new THREE.DirectionalLight(0xfffaed, currentTheme.sunIntensity);
@@ -726,7 +729,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     }
 
     // Main Dharma Hall with Golden Buddha Statue (대웅전 - 금색 부처님 상 봉안)
-    const dharmaHall = builder.buildMainDharmaHall(0, -48);
+    const dharmaHall = builder.buildMainDharmaHall(0, -48, buddhaEnvTarget.texture);
     scene.add(dharmaHall);
 
     // Meditation Hall (선방 · 명상원 - West)
@@ -1345,6 +1348,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', handleResize);
       envRenderTarget.dispose();
+      buddhaEnvTarget.dispose();
       renderer.dispose();
     };
   }, [currentTempleId]);
@@ -1406,7 +1410,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   }, [activeModal]);
 
   return (
-    <div className="relative w-screen h-screen bg-stone-950 overflow-hidden select-none">
+    <div className="relative w-screen h-dvh bg-stone-950 overflow-hidden select-none">
       
       {/* 3D WebGL Canvas */}
       <div ref={mountRef} className="w-full h-full cursor-crosshair touch-none" />
@@ -1691,19 +1695,25 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
       {/* Unified Bottom Dock: 5 Core Programs & Golden Buddha Hall */}
       <div
-        className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[96%] max-w-4xl transition-all duration-300 pointer-events-auto ${
-          isControlsCollapsed ? 'translate-y-[calc(100%-36px)]' : 'translate-y-0'
+        className={`absolute left-1/2 -translate-x-1/2 z-20 transition-all duration-300 pointer-events-none ${
+          isControlsCollapsed
+            ? 'bottom-[calc(env(safe-area-inset-bottom)+4rem)] sm:bottom-4 w-auto max-w-[92%]'
+            : 'bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:bottom-4 w-[96%] max-w-4xl'
         }`}
       >
         {/* Toggle Collapse */}
-        <div className="flex justify-center -mb-px">
+        <div className="flex justify-center -mb-px pointer-events-auto">
           <button
             onClick={() => setIsControlsCollapsed(!isControlsCollapsed)}
-            className="px-4 py-1 bg-stone-950/90 text-stone-300 hover:text-white rounded-t-lg border-t border-x border-stone-700 text-xs font-serif flex items-center gap-1.5 shadow-md"
+            className={`px-4 bg-stone-950/92 text-stone-200 hover:text-white border border-stone-700 text-xs font-serif flex items-center gap-1.5 shadow-xl ${
+              isControlsCollapsed
+                ? 'py-2 sm:py-1.5 rounded-full sm:rounded-t-lg sm:rounded-b-none'
+                : 'py-1.5 rounded-t-lg border-b-0'
+            }`}
           >
             {isControlsCollapsed ? (
               <>
-                <ChevronUp className="w-3.5 h-3.5" />
+                <ChevronUp className="w-3.5 h-3.5 text-amber-400" />
                 <span>5대 수행 프로그램 및 장소 바로가기</span>
               </>
             ) : (
@@ -1716,7 +1726,13 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         </div>
 
         {/* Dock Panel */}
-        <div className="bg-stone-950/92 backdrop-blur-md border border-stone-700/80 rounded-2xl p-4 shadow-2xl text-stone-200">
+        <div
+          className={`bg-stone-950/92 backdrop-blur-md border border-stone-700/80 rounded-2xl shadow-2xl text-stone-200 pointer-events-auto transition-all duration-200 ${
+            isControlsCollapsed
+              ? 'hidden'
+              : 'p-3.5 sm:p-4 max-h-[62dvh] sm:max-h-none overflow-y-auto'
+          }`}
+        >
           <div className="flex items-center justify-between text-[11px] text-stone-400 font-serif mb-2.5">
             <span className="flex items-center gap-1.5">
               <MousePointerClick className="w-3.5 h-3.5 text-amber-400" />

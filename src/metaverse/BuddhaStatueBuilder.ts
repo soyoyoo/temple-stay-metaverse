@@ -9,6 +9,69 @@ const TARGET_STATUE_HEIGHT = 5.5; // Fits atop y=2.25 altar (4.6m deep) with cle
 let cachedBuddhaTemplatePromise: Promise<THREE.Group> | null = null;
 
 /**
+ * Generates a gap-free warm golden studio PMREM environment map for the Buddha statue.
+ * Eliminates dark RoomEnvironment wall voids that cause dark blotches on curved metallic surfaces,
+ * especially on mobile WebGL GPUs.
+ */
+export function createWarmBuddhaStudioEnvMap(renderer: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
+  const envScene = new THREE.Scene();
+
+  // Seamless 360° warm sky-to-gold gradient dome (zero dark gaps)
+  const gradCanvas = document.createElement('canvas');
+  gradCanvas.width = 64;
+  gradCanvas.height = 128;
+  const gctx = gradCanvas.getContext('2d')!;
+  const grad = gctx.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0.0, '#fff9e6');  // zenith soft cream
+  grad.addColorStop(0.38, '#ffe7ad'); // upper warm gold
+  grad.addColorStop(0.58, '#ffd480'); // horizon luminous gold
+  grad.addColorStop(1.0, '#b57f36');  // warm amber-bronze bounce below
+  gctx.fillStyle = grad;
+  gctx.fillRect(0, 0, 64, 128);
+
+  const domeTex = new THREE.CanvasTexture(gradCanvas);
+  domeTex.colorSpace = THREE.SRGBColorSpace;
+  const domeGeo = new THREE.SphereGeometry(20, 24, 16);
+  const domeMat = new THREE.MeshBasicMaterial({ map: domeTex, side: THREE.BackSide });
+  envScene.add(new THREE.Mesh(domeGeo, domeMat));
+
+  // Soft wrap-around warm studio softbox panels for natural metallic specular sculpting
+  const panelMatBright = new THREE.MeshBasicMaterial({ color: 0xfff8e1, side: THREE.DoubleSide });
+  const panelMatWarm = new THREE.MeshBasicMaterial({ color: 0xffdf96, side: THREE.DoubleSide });
+  const panelGeo = new THREE.PlaneGeometry(10, 8);
+
+  const panels: Array<{ pos: [number, number, number]; look: [number, number, number]; bright: boolean }> = [
+    { pos: [0, 8, 12], look: [0, 0, 0], bright: true },    // Front-top key softbox
+    { pos: [-11, 4, 8], look: [0, 0, 0], bright: false },  // Front-left fill softbox
+    { pos: [11, 4, 8], look: [0, 0, 0], bright: false },   // Front-right fill softbox
+    { pos: [0, 14, 0], look: [0, 0, 0], bright: true },    // Overhead halo softbox
+    { pos: [0, 4, -12], look: [0, 0, 0], bright: false },  // Back rim softbox
+  ];
+  const panelMeshes: THREE.Mesh[] = [];
+  panels.forEach(({ pos, look, bright }) => {
+    const p = new THREE.Mesh(panelGeo, bright ? panelMatBright : panelMatWarm);
+    p.position.set(pos[0], pos[1], pos[2]);
+    p.lookAt(look[0], look[1], look[2]);
+    envScene.add(p);
+    panelMeshes.push(p);
+  });
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const renderTarget = pmrem.fromScene(envScene, 0.04);
+
+  // Clean up temporary studio scene resources
+  pmrem.dispose();
+  domeGeo.dispose();
+  domeMat.dispose();
+  domeTex.dispose();
+  panelGeo.dispose();
+  panelMatBright.dispose();
+  panelMatWarm.dispose();
+
+  return renderTarget;
+}
+
+/**
  * Generates a soft radial glow sprite texture for the 4 sanctuary pedestal lamps.
  */
 function createWarmGlowSpriteTexture(): THREE.CanvasTexture {
@@ -63,7 +126,8 @@ function loadGoldenBuddhaTemplate(): Promise<THREE.Group> {
               }
 
               child.castShadow = true;
-              child.receiveShadow = true;
+              // Disable self-receiveShadow to eliminate mobile 16-bit shadow acne & roof blotches
+              child.receiveShadow = false;
 
               const enhanceMaterial = (srcMat: THREE.Material): THREE.Material => {
                 const cached = processedMats.get(srcMat);
@@ -72,7 +136,15 @@ function loadGoldenBuddhaTemplate(): Promise<THREE.Group> {
                 const mat = srcMat.clone();
                 if (mat instanceof THREE.MeshStandardMaterial) {
                   mat.flatShading = false;
-                  mat.envMapIntensity = 1.4;
+                  mat.envMapIntensity = 1.45;
+                  // Balanced metalness unlocks warm front diffuse fill alongside metallic gold sheen
+                  mat.metalness = 0.72;
+                  mat.roughness = 0.92;
+                  if (mat.normalScale) {
+                    mat.normalScale.set(0.65, 0.65);
+                  }
+                  mat.emissive = new THREE.Color(0x2a1804);
+                  mat.emissiveIntensity = 0.08;
                   mat.needsUpdate = true;
                 }
                 processedMats.set(srcMat, mat);
@@ -125,7 +197,10 @@ function loadGoldenBuddhaTemplate(): Promise<THREE.Group> {
  * Builds the Main Dharma Hall Sanctuary Altar Assembly (대웅전 불단)
  * enshrining the `/assets/golden_buddha_simp_mesh.glb` Golden Buddha Statue.
  */
-export function buildRealisticBuddhaAltar(woodMat: THREE.Material): THREE.Group {
+export function buildRealisticBuddhaAltar(
+  woodMat: THREE.Material,
+  buddhaEnvMap?: THREE.Texture
+): THREE.Group {
   const assembly = new THREE.Group();
 
   // 1. Dark Timber Sanctuary Backdrop Panels & Grand Altar Table (불단)
@@ -184,6 +259,23 @@ export function buildRealisticBuddhaAltar(woodMat: THREE.Material): THREE.Group 
       placeholderMat.dispose();
 
       const statueInstance = template.clone(true);
+      statueInstance.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const applyEnv = (mat: THREE.Material) => {
+          if (mat instanceof THREE.MeshStandardMaterial) {
+            if (buddhaEnvMap) {
+              mat.envMap = buddhaEnvMap;
+            }
+            mat.envMapIntensity = 1.45;
+            mat.needsUpdate = true;
+          }
+        };
+        if (Array.isArray(child.material)) {
+          child.material.forEach(applyEnv);
+        } else if (child.material) {
+          applyEnv(child.material);
+        }
+      });
       buddhaMount.add(statueInstance);
     })
     .catch((err) => {
@@ -238,26 +330,34 @@ export function buildRealisticBuddhaAltar(woodMat: THREE.Material): THREE.Group 
     assembly.add(glowSprite);
   });
 
-  // Warm key Spotlight, Fill Aura, Under-chin Sculpting Bounce & Side Rim Lights
-  const keySpot = new THREE.SpotLight(0xffe2a8, 24, 28, Math.PI / 4, 0.55, 1.3);
-  keySpot.position.set(0.5, 8.6, -2.6);
-  keySpot.target.position.set(0, 5.2, -9.2);
+  // Warm key Spotlight & Soft Wrap-around Front/Side Fill Lights illuminating face, shoulders, arms & chest
+  const keySpot = new THREE.SpotLight(0xffe6b8, 28, 30, Math.PI / 3, 0.85, 1.0);
+  keySpot.position.set(0.4, 8.2, -1.8);
+  keySpot.target.position.set(0, 5.0, -8.8);
   assembly.add(keySpot);
   assembly.add(keySpot.target);
 
-  const fillAura = new THREE.PointLight(0xffd27a, 4.4, 22);
-  fillAura.position.set(0, 6.2, -5.0);
+  const fillAura = new THREE.PointLight(0xffdca0, 4.8, 22, 1.15);
+  fillAura.position.set(0, 6.0, -4.4);
   assembly.add(fillAura);
 
-  const chinBounce = new THREE.PointLight(0xffcf7a, 1.8, 9);
-  chinBounce.position.set(0, 4.4, -6.7);
+  const fillLeft = new THREE.PointLight(0xffe0a8, 3.4, 18, 1.2);
+  fillLeft.position.set(-3.2, 5.3, -4.6);
+  assembly.add(fillLeft);
+
+  const fillRight = new THREE.PointLight(0xffe0a8, 3.4, 18, 1.2);
+  fillRight.position.set(3.2, 5.3, -4.6);
+  assembly.add(fillRight);
+
+  const chinBounce = new THREE.PointLight(0xffd78a, 2.2, 11, 1.2);
+  chinBounce.position.set(0, 4.2, -6.2);
   assembly.add(chinBounce);
 
-  const rimLeft = new THREE.PointLight(0xffb84d, 3.0, 16);
+  const rimLeft = new THREE.PointLight(0xffbe5c, 3.0, 16);
   rimLeft.position.set(-5.6, 5.4, -10.3);
   assembly.add(rimLeft);
 
-  const rimRight = new THREE.PointLight(0xffb84d, 3.0, 16);
+  const rimRight = new THREE.PointLight(0xffbe5c, 3.0, 16);
   rimRight.position.set(5.6, 5.4, -10.3);
   assembly.add(rimRight);
 

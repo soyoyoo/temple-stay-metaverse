@@ -200,7 +200,7 @@ export class TempleBuilder {
    * Enshrining the Glorious Golden Buddha Statue
    * With 16-meter super-wide open entrance (NO wall collision at door!)
    */
-  public buildMainDharmaHall(x: number, z: number): THREE.Group {
+  public buildMainDharmaHall(x: number, z: number, buddhaEnvMap?: THREE.Texture): THREE.Group {
     const hall = new THREE.Group();
     hall.position.set(x, 0, z);
 
@@ -306,8 +306,8 @@ export class TempleBuilder {
     ridge.castShadow = true;
     hall.add(ridge);
 
-    // 6. HIGH-DETAIL REALISTIC ANTIQUE GILT-BRONZE BUDDHA STATUE & SANCTUARY ALTAR
-    hall.add(buildRealisticBuddhaAltar(this.woodMat));
+    // 6. GOLDEN BUDDHA STATUE & SANCTUARY ALTAR
+    hall.add(buildRealisticBuddhaAltar(this.woodMat, buddhaEnvMap));
 
     // Signboard: 大雄殿
     const plaqueGeo = new THREE.BoxGeometry(4.2, 1.4, 0.15);
