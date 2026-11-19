@@ -103,6 +103,7 @@ type TempleId = 'seocho' | 'mungyeong' | 'jukrim';
 
 interface PlayerState {
   id: string;
+  clientKey: string;
   nickname: string;
   templeId: TempleId;
   x: number;
@@ -112,6 +113,21 @@ interface PlayerState {
   action: string;
   isMoving: boolean;
   robeColor: number;
+  joined: boolean;
+}
+
+interface HttpPlayerEntry extends PlayerState {
+  lastSeen: number;
+}
+
+export interface PlayerSummary {
+  id: string;
+  nickname: string;
+  templeId: TempleId;
+  x: number;
+  y: number;
+  z: number;
+  action: string;
 }
 
 const ROBE_PALETTE = [
@@ -128,6 +144,12 @@ function sanitizeNickname(raw: unknown): string {
   if (typeof raw !== 'string') return '수행자';
   const cleaned = raw.replace(/[\r\n\t<>]/g, '').trim().slice(0, 12);
   return cleaned || '수행자';
+}
+
+function sanitizeClientKey(raw: unknown, fallbackId: string): string {
+  if (typeof raw !== 'string') return fallbackId;
+  const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+  return cleaned || fallbackId;
 }
 
 function sanitizeTempleId(raw: unknown): TempleId {
@@ -148,6 +170,8 @@ async function startServer() {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   const clients = new Map<WebSocket, PlayerState>();
+  const wsAlive = new WeakMap<WebSocket, boolean>();
+  const httpPlayers = new Map<string, HttpPlayerEntry>();
   let nextSeq = 1;
 
   function sendJson(ws: WebSocket, payload: unknown) {
@@ -156,10 +180,65 @@ async function startServer() {
     }
   }
 
+  function toPublicPlayer(p: PlayerState) {
+    return {
+      id: p.id,
+      nickname: p.nickname,
+      templeId: p.templeId,
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      rotY: p.rotY,
+      action: p.action,
+      isMoving: p.isMoving,
+      robeColor: p.robeColor,
+    };
+  }
+
+  function getActivePlayers(): PlayerState[] {
+    const byId = new Map<string, PlayerState>();
+    for (const state of clients.values()) {
+      if (state.joined) {
+        byId.set(state.id, state);
+      }
+    }
+    const now = Date.now();
+    for (const [key, entry] of httpPlayers.entries()) {
+      if (now - entry.lastSeen > 15000) {
+        httpPlayers.delete(key);
+        continue;
+      }
+      // Do not duplicate a player who already has an active WebSocket
+      let hasWs = false;
+      for (const wsState of clients.values()) {
+        if (wsState.joined && wsState.clientKey === entry.clientKey) {
+          hasWs = true;
+          break;
+        }
+      }
+      if (!hasWs) {
+        byId.set(entry.id, entry);
+      }
+    }
+    return Array.from(byId.values());
+  }
+
+  function getAllPlayersSummary(): PlayerSummary[] {
+    return getActivePlayers().map((p) => ({
+      id: p.id,
+      nickname: p.nickname,
+      templeId: p.templeId,
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      action: p.action,
+    }));
+  }
+
   function broadcastToTemple(templeId: TempleId, payload: unknown, excludeWs?: WebSocket) {
     const encoded = JSON.stringify(payload);
     for (const [ws, state] of clients.entries()) {
-      if (ws !== excludeWs && state.templeId === templeId && ws.readyState === WebSocket.OPEN) {
+      if (ws !== excludeWs && state.joined && state.templeId === templeId && ws.readyState === WebSocket.OPEN) {
         ws.send(encoded);
       }
     }
@@ -171,35 +250,85 @@ async function startServer() {
       seocho: 0,
       jukrim: 0,
     };
-    for (const state of clients.values()) {
+    const active = getActivePlayers();
+    for (const state of active) {
       countsByTemple[state.templeId] += 1;
     }
     const encoded = JSON.stringify({
       type: 'presence:count',
-      totalOnline: clients.size,
+      totalOnline: active.length,
       maxUsers: MAX_CONCURRENT_USERS,
       countsByTemple,
+      allPlayersSummary: active.map((p) => ({
+        id: p.id,
+        nickname: p.nickname,
+        templeId: p.templeId,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        action: p.action,
+      })),
     });
-    for (const ws of clients.keys()) {
-      if (ws.readyState === WebSocket.OPEN) {
+    for (const [ws, state] of clients.entries()) {
+      if (state.joined && ws.readyState === WebSocket.OPEN) {
         ws.send(encoded);
       }
     }
   }
 
-  function getPlayersInTemple(templeId: TempleId, excludeId?: string): PlayerState[] {
-    const list: PlayerState[] = [];
-    for (const state of clients.values()) {
-      if (state.templeId === templeId && state.id !== excludeId) {
-        list.push(state);
-      }
-    }
-    return list;
+  function getPlayersInTemple(templeId: TempleId, excludeId?: string) {
+    return getActivePlayers()
+      .filter((state) => state.templeId === templeId && state.id !== excludeId)
+      .map(toPublicPlayer);
   }
 
+  // Heartbeat keepalive (prevents Cloud Run / reverse proxies from silently dropping idle WS)
+  const heartbeatInterval = setInterval(() => {
+    const now = Date.now();
+    let changed = false;
+
+    for (const [ws, state] of clients.entries()) {
+      if (wsAlive.get(ws) === false) {
+        clients.delete(ws);
+        if (state.joined) {
+          broadcastToTemple(state.templeId, { type: 'player:left', id: state.id });
+          changed = true;
+        }
+        try {
+          ws.terminate();
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      wsAlive.set(ws, false);
+      try {
+        ws.ping();
+      } catch {
+        // ignore
+      }
+    }
+
+    for (const [key, entry] of httpPlayers.entries()) {
+      if (now - entry.lastSeen > 15000) {
+        httpPlayers.delete(key);
+        broadcastToTemple(entry.templeId, { type: 'player:left', id: entry.id });
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      broadcastPresenceCount();
+    }
+  }, 15000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
+
   wss.on('connection', (ws: WebSocket) => {
-    // Enforce 100 concurrent user limit
-    if (clients.size >= MAX_CONCURRENT_USERS) {
+    const activeCount = getActivePlayers().length;
+    if (activeCount >= MAX_CONCURRENT_USERS) {
       sendJson(ws, {
         type: 'room:full',
         maxUsers: MAX_CONCURRENT_USERS,
@@ -214,6 +343,7 @@ async function startServer() {
 
     const initialState: PlayerState = {
       id: playerId,
+      clientKey: playerId,
       nickname: '수행자',
       templeId: 'mungyeong',
       x: 0,
@@ -223,11 +353,18 @@ async function startServer() {
       action: 'idle',
       isMoving: false,
       robeColor,
+      joined: false,
     };
 
     clients.set(ws, initialState);
+    wsAlive.set(ws, true);
+
+    ws.on('pong', () => {
+      wsAlive.set(ws, true);
+    });
 
     ws.on('message', (rawData) => {
+      wsAlive.set(ws, true);
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(rawData.toString());
@@ -238,8 +375,15 @@ async function startServer() {
       const current = clients.get(ws);
       if (!current) return;
 
+      if (msg.type === 'ping') {
+        sendJson(ws, { type: 'pong' });
+        return;
+      }
+
       if (msg.type === 'join') {
         const prevTemple = current.templeId;
+        const wasJoined = current.joined;
+        current.clientKey = sanitizeClientKey(msg.clientKey, current.id);
         current.nickname = sanitizeNickname(msg.nickname);
         current.templeId = sanitizeTempleId(msg.templeId);
         current.x = clampCoord(msg.x, 0);
@@ -248,22 +392,57 @@ async function startServer() {
         current.rotY = typeof msg.rotY === 'number' && Number.isFinite(msg.rotY) ? msg.rotY : 0;
         current.action = typeof msg.action === 'string' ? msg.action.slice(0, 20) : 'idle';
         current.isMoving = Boolean(msg.isMoving);
+        current.joined = true;
 
-        if (prevTemple !== current.templeId) {
+        // Remove any HTTP fallback record for this same client tab
+        const existingHttp = httpPlayers.get(current.clientKey);
+        if (existingHttp) {
+          httpPlayers.delete(current.clientKey);
+          if (existingHttp.id !== current.id) {
+            broadcastToTemple(existingHttp.templeId, { type: 'player:left', id: existingHttp.id }, ws);
+          }
+        }
+
+        // Also close stale duplicate WS with the exact same clientKey if browser reconnected quickly
+        for (const [otherWs, otherState] of clients.entries()) {
+          if (otherWs !== ws && otherState.joined && otherState.clientKey === current.clientKey) {
+            clients.delete(otherWs);
+            broadcastToTemple(otherState.templeId, { type: 'player:left', id: otherState.id }, ws);
+            try {
+              otherWs.close(1000, 'Replaced by newer connection');
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        if (wasJoined && prevTemple !== current.templeId) {
           broadcastToTemple(prevTemple, { type: 'player:left', id: current.id }, ws);
         }
 
+        const active = getActivePlayers();
         sendJson(ws, {
           type: 'init',
           selfId: current.id,
           maxUsers: MAX_CONCURRENT_USERS,
-          totalOnline: clients.size,
+          totalOnline: active.length,
           players: getPlayersInTemple(current.templeId, current.id),
+          allPlayersSummary: getAllPlayersSummary(),
         });
 
-        broadcastToTemple(current.templeId, { type: 'player:joined', player: current }, ws);
+        broadcastToTemple(current.templeId, { type: 'player:joined', player: toPublicPlayer(current) }, ws);
         broadcastPresenceCount();
+      } else if (msg.type === 'sync:request') {
+        if (!current.joined) return;
+        sendJson(ws, {
+          type: 'room:sync',
+          selfId: current.id,
+          templeId: current.templeId,
+          players: getPlayersInTemple(current.templeId, current.id),
+          allPlayersSummary: getAllPlayersSummary(),
+        });
       } else if (msg.type === 'state') {
+        if (!current.joined) return;
         const nextTemple = sanitizeTempleId(msg.templeId ?? current.templeId);
         const templeChanged = nextTemple !== current.templeId;
         const oldTemple = current.templeId;
@@ -280,10 +459,12 @@ async function startServer() {
           broadcastToTemple(oldTemple, { type: 'player:left', id: current.id }, ws);
           sendJson(ws, {
             type: 'room:sync',
+            selfId: current.id,
             templeId: current.templeId,
             players: getPlayersInTemple(current.templeId, current.id),
+            allPlayersSummary: getAllPlayersSummary(),
           });
-          broadcastToTemple(current.templeId, { type: 'player:joined', player: current }, ws);
+          broadcastToTemple(current.templeId, { type: 'player:joined', player: toPublicPlayer(current) }, ws);
           broadcastPresenceCount();
         } else {
           broadcastToTemple(
@@ -303,22 +484,25 @@ async function startServer() {
         }
       } else if (msg.type === 'nickname') {
         current.nickname = sanitizeNickname(msg.nickname);
-        broadcastToTemple(
-          current.templeId,
-          {
-            type: 'player:renamed',
-            id: current.id,
-            nickname: current.nickname,
-          },
-          ws
-        );
+        if (current.joined) {
+          broadcastToTemple(
+            current.templeId,
+            {
+              type: 'player:renamed',
+              id: current.id,
+              nickname: current.nickname,
+            },
+            ws
+          );
+          broadcastPresenceCount();
+        }
       }
     });
 
     ws.on('close', () => {
       const left = clients.get(ws);
       clients.delete(ws);
-      if (left) {
+      if (left && left.joined) {
         broadcastToTemple(left.templeId, { type: 'player:left', id: left.id });
         broadcastPresenceCount();
       }
@@ -327,16 +511,117 @@ async function startServer() {
     ws.on('error', () => {
       const left = clients.get(ws);
       clients.delete(ws);
-      if (left) {
+      if (left && left.joined) {
         broadcastToTemple(left.templeId, { type: 'player:left', id: left.id });
         broadcastPresenceCount();
       }
     });
   });
 
+  // HTTP fallback sync endpoint (ensures 2+ users see each other even if a proxy blocks WebSocket)
+  app.post('/api/multiplayer/sync', (req, res) => {
+    const body = req.body ?? {};
+    const clientKey = sanitizeClientKey(body.clientKey, '');
+    if (!clientKey) {
+      res.status(400).json({ error: 'CLIENT_KEY_REQUIRED' });
+      return;
+    }
+
+    // Check if this client already has a joined WebSocket
+    let wsMatched: PlayerState | undefined;
+    for (const wsState of clients.values()) {
+      if (wsState.joined && wsState.clientKey === clientKey) {
+        wsMatched = wsState;
+        break;
+      }
+    }
+
+    const templeId = sanitizeTempleId(body.templeId);
+    if (wsMatched) {
+      res.json({
+        selfId: wsMatched.id,
+        totalOnline: getActivePlayers().length,
+        maxUsers: MAX_CONCURRENT_USERS,
+        players: getPlayersInTemple(wsMatched.templeId, wsMatched.id),
+        allPlayersSummary: getAllPlayersSummary(),
+      });
+      return;
+    }
+
+    const existing = httpPlayers.get(clientKey);
+    if (!existing && getActivePlayers().length >= MAX_CONCURRENT_USERS) {
+      res.status(429).json({
+        error: 'ROOM_FULL',
+        maxUsers: MAX_CONCURRENT_USERS,
+        message: `현재 동시 접속 인원(${MAX_CONCURRENT_USERS}명)이 가득 찼습니다.`,
+      });
+      return;
+    }
+
+    const prevTemple = existing?.templeId;
+    const prevNickname = existing?.nickname;
+    const id = existing?.id || `p-http-${Date.now().toString(36)}-${nextSeq++}`;
+    const robeColor = existing?.robeColor || ROBE_PALETTE[nextSeq % ROBE_PALETTE.length];
+
+    const entry: HttpPlayerEntry = {
+      id,
+      clientKey,
+      nickname: sanitizeNickname(body.nickname),
+      templeId,
+      x: clampCoord(body.x, 0),
+      y: clampCoord(body.y, 0),
+      z: clampCoord(body.z, 18),
+      rotY: typeof body.rotY === 'number' && Number.isFinite(body.rotY) ? body.rotY : 0,
+      action: typeof body.action === 'string' ? body.action.slice(0, 20) : 'idle',
+      isMoving: Boolean(body.isMoving),
+      robeColor,
+      joined: true,
+      lastSeen: Date.now(),
+    };
+    httpPlayers.set(clientKey, entry);
+
+    if (!existing) {
+      broadcastToTemple(entry.templeId, { type: 'player:joined', player: toPublicPlayer(entry) });
+      broadcastPresenceCount();
+    } else if (prevTemple !== entry.templeId) {
+      if (prevTemple) {
+        broadcastToTemple(prevTemple, { type: 'player:left', id: entry.id });
+      }
+      broadcastToTemple(entry.templeId, { type: 'player:joined', player: toPublicPlayer(entry) });
+      broadcastPresenceCount();
+    } else {
+      if (prevNickname !== entry.nickname) {
+        broadcastToTemple(entry.templeId, {
+          type: 'player:renamed',
+          id: entry.id,
+          nickname: entry.nickname,
+        });
+        broadcastPresenceCount();
+      }
+      broadcastToTemple(entry.templeId, {
+        type: 'player:updated',
+        id: entry.id,
+        x: entry.x,
+        y: entry.y,
+        z: entry.z,
+        rotY: entry.rotY,
+        action: entry.action,
+        isMoving: entry.isMoving,
+      });
+    }
+
+    res.json({
+      selfId: entry.id,
+      totalOnline: getActivePlayers().length,
+      maxUsers: MAX_CONCURRENT_USERS,
+      players: getPlayersInTemple(entry.templeId, entry.id),
+      allPlayersSummary: getAllPlayersSummary(),
+    });
+  });
+
   app.get('/api/presence', (_req, res) => {
     res.json({
-      onlineCount: clients.size,
+      onlineCount: getActivePlayers().length,
       maxUsers: MAX_CONCURRENT_USERS,
     });
   });

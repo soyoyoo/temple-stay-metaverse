@@ -192,6 +192,21 @@ export class RemotePlayersManager {
     shadowMesh.position.y = 0.02;
     mesh.add(shadowMesh);
 
+    const haloGeo = new THREE.RingGeometry(0.47, 0.57, 24);
+    haloGeo.rotateX(-Math.PI / 2);
+    const haloMesh = new THREE.Mesh(
+      haloGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x34d399,
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    haloMesh.position.y = 0.03;
+    mesh.add(haloMesh);
+
     const cushionGroup = new THREE.Group();
     cushionGroup.position.set(0, 0.04, 0);
     cushionGroup.visible = false;
@@ -251,9 +266,9 @@ export class RemotePlayersManager {
     rotY: number;
     action: AvatarActionType;
     isMoving: boolean;
-  }) {
+  }): boolean {
     const p = this.players.get(update.id);
-    if (!p) return;
+    if (!p) return false;
     p.targetPos.set(update.x, update.y, update.z);
     p.targetRotY = update.rotY;
     if (p.action !== update.action) {
@@ -262,6 +277,7 @@ export class RemotePlayersManager {
       this.drawNametag(p);
     }
     p.isMoving = update.isMoving;
+    return true;
   }
 
   public renamePlayer(id: string, nickname: string) {

@@ -320,8 +320,8 @@ export class TempleBuilder {
       id: 'dharma',
       title: '대웅전',
       subTitle: '지도 법사님 법문 & 부처님 참배',
-      position: new THREE.Vector3(x, 1.5, z + 8.0),
-      radius: 12.0,
+      position: new THREE.Vector3(x, 1.2, z + 2.0),
+      radius: 23.0,
     });
 
     return hall;
@@ -437,7 +437,7 @@ export class TempleBuilder {
       title: '선방 · 명상원 (選佛場)',
       subTitle: '고요한 호흡 명상 (아나파나사티)',
       position: new THREE.Vector3(x, 1.2, z),
-      radius: 12.0,
+      radius: 21.0,
     });
 
     return hall;
@@ -549,7 +549,7 @@ export class TempleBuilder {
       title: '108배 정진전 (百八拜)',
       subTitle: '하심(下心)과 번뇌를 비우는 108배 정진',
       position: new THREE.Vector3(x, 1.2, z),
-      radius: 12.0,
+      radius: 21.0,
     });
 
     return hall;
@@ -606,7 +606,7 @@ export class TempleBuilder {
       title: '범종각 (梵鐘閣)',
       subTitle: '세상을 깨우는 맑은 종소리 울림',
       position: new THREE.Vector3(x, 1.2, z),
-      radius: 9.0,
+      radius: 12.0,
     });
 
     return pavilion;
@@ -727,7 +727,7 @@ export class TempleBuilder {
       title: '연화정 마당 (차담과 마음나누기)',
       subTitle: '푸른 잔디 위 따뜻한 차담 & 도반들과 마음 나누기',
       position: new THREE.Vector3(x, 1.2, z),
-      radius: 10.0,
+      radius: 13.0,
     });
 
     return courtyard;
@@ -780,7 +780,7 @@ export class TempleBuilder {
       title: '대나무 숲길 (포행로)',
       subTitle: '발바닥 감각을 알아차리는 묵언 산책 (보행 명상)',
       position: new THREE.Vector3(x, 1.2, z),
-      radius: 14.0,
+      radius: 18.0,
     });
 
     return trail;

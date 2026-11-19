@@ -5,7 +5,7 @@ import { TempleBuilder, InteractiveHotspot, CollisionBox } from './TempleBuilder
 import { PlayerAvatar, AvatarActionType } from './PlayerAvatar';
 import { OtherPractitionersManager } from './OtherPractitioners';
 import { RemotePlayersManager } from './RemotePlayersManager';
-import { MultiplayerClient, RemotePlayerState } from './MultiplayerClient';
+import { MultiplayerClient, RemotePlayerState, PlayerSummary } from './MultiplayerClient';
 import { InWorldProgramModal } from './InWorldProgramModal';
 import { sound } from '../utils/soundEngine';
 import {
@@ -25,6 +25,7 @@ import {
   ZoomIn,
   ZoomOut,
   Settings,
+  Navigation,
 } from 'lucide-react';
 
 interface MetaverseSceneProps {
@@ -61,11 +62,14 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [onlineCount, setOnlineCount] = useState<number>(1);
   const [maxUsers, setMaxUsers] = useState<number>(100);
+  const [onlinePlayers, setOnlinePlayers] = useState<PlayerSummary[]>([]);
+  const [showOnlineRoster, setShowOnlineRoster] = useState<boolean>(false);
   const [roomFullMessage, setRoomFullMessage] = useState<string | null>(null);
 
   const mpClientRef = useRef<MultiplayerClient | null>(null);
   const remotePlayersRef = useRef<RemotePlayersManager | null>(null);
-  const pendingRoomPlayersRef = useRef<RemotePlayerState[] | null>(null);
+  const selfPlayerIdRef = useRef<string | null>(null);
+  const roomPlayersMapRef = useRef<Map<string, RemotePlayerState>>(new Map());
   const currentTempleIdRef = useRef(currentTempleId);
 
   const [cameraMode, setCameraMode] = useState<'third' | 'first'>('third');
@@ -89,9 +93,21 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const [isNearYeonhwajeongChairs, setIsNearYeonhwajeongChairs] = useState(false);
   const isNearChairsRef = useRef(false);
 
+  // Scatter initial spawn slightly around courtyard hub so simultaneous users stand visibly side-by-side
+  const initialSpawnRef = useRef<THREE.Vector3 | null>(null);
+  if (!initialSpawnRef.current) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 2.0 + Math.random() * 2.5;
+    initialSpawnRef.current = new THREE.Vector3(
+      Math.cos(angle) * radius,
+      0,
+      17.5 + Math.sin(angle) * radius
+    );
+  }
+
   // Mutable refs for Three.js render loop
-  const playerPos = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 18));
-  const playerTargetPos = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 18));
+  const playerPos = useRef<THREE.Vector3>(initialSpawnRef.current.clone());
+  const playerTargetPos = useRef<THREE.Vector3>(initialSpawnRef.current.clone());
   const playerTargetRotation = useRef<number>(0);
   const playerCurrentRotation = useRef<number>(0);
   const cameraYawRef = useRef<number>(0);
@@ -139,32 +155,59 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     if (!hasJoinedSession) return;
 
     const client = new MultiplayerClient({
-      onInit: (players, total, limit) => {
+      onInit: (players, total, limit, selfId, summary) => {
         setOnlineCount(total);
         setMaxUsers(limit);
         setRoomFullMessage(null);
-        pendingRoomPlayersRef.current = players;
+        if (selfId) selfPlayerIdRef.current = selfId;
+        const map = new Map<string, RemotePlayerState>();
+        for (const p of players) map.set(p.id, p);
+        roomPlayersMapRef.current = map;
         remotePlayersRef.current?.syncAll(players);
+        if (summary) setOnlinePlayers(summary);
       },
-      onRoomSync: (players) => {
-        pendingRoomPlayersRef.current = players;
+      onRoomSync: (players, selfId, summary) => {
+        if (selfId) selfPlayerIdRef.current = selfId;
+        const map = new Map<string, RemotePlayerState>();
+        for (const p of players) map.set(p.id, p);
+        roomPlayersMapRef.current = map;
         remotePlayersRef.current?.syncAll(players);
+        if (summary) setOnlinePlayers(summary);
       },
       onPlayerJoined: (player) => {
+        roomPlayersMapRef.current.set(player.id, player);
         remotePlayersRef.current?.addPlayer(player);
+        setClickMoveFeedback(`'${player.nickname}' 도반이 도량에 함께합니다 🙏`);
+        setTimeout(() => setClickMoveFeedback(null), 2800);
       },
       onPlayerUpdated: (update) => {
-        remotePlayersRef.current?.updatePlayerState(update);
+        const existing = roomPlayersMapRef.current.get(update.id);
+        if (existing) {
+          existing.x = update.x;
+          existing.y = update.y;
+          existing.z = update.z;
+          existing.rotY = update.rotY;
+          existing.action = update.action;
+          existing.isMoving = update.isMoving;
+        }
+        const ok = remotePlayersRef.current?.updatePlayerState(update);
+        if (ok === false) {
+          client.requestRoomSync();
+        }
       },
       onPlayerRenamed: (id, newName) => {
+        const existing = roomPlayersMapRef.current.get(id);
+        if (existing) existing.nickname = newName;
         remotePlayersRef.current?.renamePlayer(id, newName);
       },
       onPlayerLeft: (id) => {
+        roomPlayersMapRef.current.delete(id);
         remotePlayersRef.current?.removePlayer(id);
       },
-      onPresenceCount: (total, limit) => {
+      onPresenceCount: (total, limit, summary) => {
         setOnlineCount(total);
         setMaxUsers(limit);
+        if (summary) setOnlinePlayers(summary);
       },
       onRoomFull: (message) => {
         setRoomFullMessage(message);
@@ -452,6 +495,70 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     setTimeout(() => setClickMoveFeedback(null), 3200);
   }, [currentTempleId, getSurfaceElevation, walkToLocation]);
 
+  // Walk or switch sanctuary to meet a connected practitioner
+  const goToPeer = useCallback(
+    (peer: PlayerSummary) => {
+      setShowOnlineRoster(false);
+      if (isSittingOnChairRef.current) {
+        isSittingOnChairRef.current = false;
+        setIsSittingOnChair(false);
+      }
+
+      const tx = THREE.MathUtils.clamp(peer.x + 2.0, -115, 115);
+      const tz = THREE.MathUtils.clamp(peer.z + 2.0, -115, 115);
+      const ty = getSurfaceElevation(tx, tz, peer.templeId);
+
+      if (peer.templeId !== currentTempleId) {
+        playerPos.current.set(tx, ty, tz);
+        playerTargetPos.current.copy(playerPos.current);
+        waypointQueueRef.current = [];
+        setIsAutoWalking(false);
+        onSelectTemple(peer.templeId);
+        setClickMoveFeedback(`'${peer.nickname}' 도반이 있는 도량으로 이동했습니다 🙏`);
+        setTimeout(() => setClickMoveFeedback(null), 3000);
+        return;
+      }
+
+      const queue: THREE.Vector3[] = [];
+      const curFar =
+        Math.abs(playerPos.current.x) > 20 || playerPos.current.z < -25 || playerPos.current.z > 30;
+      const peerFar = Math.abs(tx) > 20 || tz < -25 || tz > 30;
+      if (curFar || peerFar) {
+        queue.push(new THREE.Vector3(0, 0, 8));
+      }
+      // Route via entrance doors if peer is inside one of the halls
+      if (tx >= -20 && tx <= 20 && tz <= -28) {
+        queue.push(new THREE.Vector3(0, 0, -26));
+      } else if (tx <= -28 && Math.abs(tz) <= 18) {
+        queue.push(new THREE.Vector3(-24, 0, 0));
+      } else if (tx >= 28 && Math.abs(tz) <= 18) {
+        queue.push(new THREE.Vector3(24, 0, 0));
+      }
+      queue.push(new THREE.Vector3(tx, ty, tz));
+
+      for (const wp of queue) {
+        wp.y = getSurfaceElevation(wp.x, wp.z, currentTempleId);
+      }
+      const finalTarget = queue[queue.length - 1];
+      waypointQueueRef.current = queue;
+      walkTargetActionRef.current = 'idle';
+      walkTargetLabelRef.current = `${peer.nickname} 도반 곁`;
+      walkTargetHotspotRef.current = null;
+
+      playerTargetPos.current.copy(queue.shift()!);
+      if (waypointMarkerRef.current) {
+        waypointMarkerRef.current.position.set(finalTarget.x, finalTarget.y + 0.05, finalTarget.z);
+        waypointMarkerRef.current.visible = true;
+      }
+      setIsAutoWalking(true);
+      setAvatarAction('idle');
+      avatarRef.current?.setAction('idle');
+      setClickMoveFeedback(`'${peer.nickname}' 도반 곁으로 걸어갑니다 🚶`);
+      setTimeout(() => setClickMoveFeedback(null), 2800);
+    },
+    [currentTempleId, getSurfaceElevation, onSelectTemple]
+  );
+
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -669,8 +776,11 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     const remotePlayers = new RemotePlayersManager();
     scene.add(remotePlayers.group);
     remotePlayersRef.current = remotePlayers;
-    if (pendingRoomPlayersRef.current) {
-      remotePlayers.syncAll(pendingRoomPlayersRef.current);
+    const currentRoomPlayers = Array.from(roomPlayersMapRef.current.values()).filter(
+      (p) => p.templeId === currentTempleId
+    );
+    if (currentRoomPlayers.length > 0) {
+      remotePlayers.syncAll(currentRoomPlayers);
     }
 
     // 9. Player Avatar (커스텀 닉네임 수행자 아바타)
@@ -694,6 +804,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       },
       true
     );
+    mpClientRef.current?.requestRoomSync();
 
     // 10. Wall Collision Checking Helper (실내에서 벽을 뚫고 이동하지 못하게 방지 - 문 통과 원활)
     const checkCollision = (testPos: THREE.Vector3, padding = 0.20): boolean => {
@@ -1172,15 +1283,33 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         camera.lookAt(playerPos.current.clone().add(lookDir));
       }
 
-      // Check proximity to landmarks
+      // Check proximity to landmarks (exact hall footprints + horizontal XZ distance)
       let nearestSpot: InteractiveHotspot | null = null;
-      let minDistance = Infinity;
+      const px = playerPos.current.x;
+      const pz = playerPos.current.z;
 
-      for (const spot of hotspotsRef.current) {
-        const dist = playerPos.current.distanceTo(spot.position);
-        if (dist <= spot.radius && dist < minDistance) {
-          minDistance = dist;
-          nearestSpot = spot;
+      // Building footprint zones guarantee walking anywhere inside/on entrance steps triggers prompt
+      let zoneId: InteractiveHotspot['id'] | null = null;
+      if (px >= -20 && px <= 20 && pz >= -62 && pz <= -26) {
+        zoneId = 'dharma';
+      } else if (px >= -63 && px <= -27 && pz >= -18 && pz <= 18) {
+        zoneId = 'meditation';
+      } else if (px >= 27 && px <= 63 && pz >= -18 && pz <= 18) {
+        zoneId = 'bows108';
+      }
+
+      if (zoneId) {
+        nearestSpot = hotspotsRef.current.find((s) => s.id === zoneId) || null;
+      }
+
+      if (!nearestSpot) {
+        let minDistance = Infinity;
+        for (const spot of hotspotsRef.current) {
+          const dist = Math.hypot(px - spot.position.x, pz - spot.position.z);
+          if (dist <= spot.radius && dist < minDistance) {
+            minDistance = dist;
+            nearestSpot = spot;
+          }
         }
       }
 
@@ -1291,10 +1420,15 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-serif text-stone-400">3D 체험 메타버스</span>
-              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-sans flex items-center gap-1">
+              <button
+                onClick={() => setShowOnlineRoster((prev) => !prev)}
+                className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 text-emerald-300 px-1.5 py-0.5 rounded font-sans flex items-center gap-1 transition-colors cursor-pointer"
+                title="동시 접속 중인 도반 목록 보기 및 찾아가기"
+              >
                 <Users className="w-3 h-3 inline" />
                 <span>실시간 도반 {onlineCount}/{maxUsers}명</span>
-              </span>
+                <ChevronDown className={`w-2.5 h-2.5 transition-transform ${showOnlineRoster ? 'rotate-180' : ''}`} />
+              </button>
               <button
                 onClick={() => {
                   setNicknameDraft(nickname || '수행자');
@@ -1315,6 +1449,73 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
             </p>
           </div>
         </div>
+
+        {/* Interactive Connected Practitioners Roster (동시 접속 도반 위치 확인 & 찾아가기) */}
+        {showOnlineRoster && (
+          <div className="mt-2 bg-stone-950/92 backdrop-blur-md border border-stone-700/80 rounded-xl p-2.5 shadow-2xl text-white max-w-xs max-h-60 overflow-y-auto space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] text-emerald-300 font-serif pb-1 border-b border-stone-800">
+              <span>함께 수행 중인 도반 ({onlineCount}명)</span>
+              <button
+                onClick={() => setShowOnlineRoster(false)}
+                className="text-stone-400 hover:text-white p-0.5"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {onlinePlayers.length === 0 ? (
+              <p className="text-[11px] text-stone-400 py-1 text-center font-sans">
+                현재 나 홀로 고요히 수행 중입니다.
+              </p>
+            ) : (
+              onlinePlayers.map((peer) => {
+                const isSelf = peer.id === selfPlayerIdRef.current;
+                const templeShort =
+                  peer.templeId === 'mungyeong'
+                    ? '수련원'
+                    : peer.templeId === 'seocho'
+                      ? '회관'
+                      : '정사';
+                const areaLabel =
+                  peer.x >= -20 && peer.x <= 20 && peer.z <= -26
+                    ? '대웅전'
+                    : peer.x <= -27 && Math.abs(peer.z) <= 18
+                      ? '선방'
+                      : peer.x >= 27 && Math.abs(peer.z) <= 18
+                        ? '108배'
+                        : peer.x >= 25 && peer.z >= 25
+                          ? '연화정'
+                          : peer.x >= 35 && peer.z <= -20
+                            ? '대나무숲'
+                            : '잔디마당';
+                return (
+                  <div
+                    key={peer.id}
+                    className="flex items-center justify-between gap-2 text-xs bg-stone-900/80 px-2.5 py-1.5 rounded-lg border border-stone-800/80"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-serif font-medium text-stone-100 truncate">
+                        {peer.nickname} {isSelf && <span className="text-amber-400 text-[10px]">(나)</span>}
+                      </div>
+                      <div className="text-[10px] text-stone-400">
+                        {templeShort} · {areaLabel}
+                      </div>
+                    </div>
+                    {!isSelf && (
+                      <button
+                        onClick={() => goToPeer(peer)}
+                        className="shrink-0 px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-[10px] font-serif flex items-center gap-1 transition-colors"
+                        title="이 도반이 있는 곳으로 찾아가기"
+                      >
+                        <Navigation className="w-2.5 h-2.5" />
+                        <span>찾아가기</span>
+                      </button>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
 
         {/* 3 Sanctuary Switcher Pills */}
         <div className="mt-2 flex gap-1.5 bg-stone-950/80 p-1 rounded-xl border border-stone-800">
@@ -1438,7 +1639,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
       {/* Proximity Interaction Prompt Banner */}
       {activeNearbyHotspot && (
-        <div className="absolute top-26 left-1/2 -translate-x-1/2 z-20 pointer-events-auto animate-bounce">
+        <div className="absolute top-32 sm:top-24 left-1/2 -translate-x-1/2 z-30 pointer-events-auto animate-bounce">
           <button
             onClick={() => {
               if (activeNearbyHotspot.id === 'bell') {
@@ -1447,9 +1648,9 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
                 setActiveModal(activeNearbyHotspot.id as 'meditation' | 'bows108' | 'dharma' | 'mindshare' | 'walking');
               }
             }}
-            className="bg-amber-500 hover:bg-amber-400 text-stone-950 px-5 py-2.5 rounded-full shadow-2xl flex items-center gap-2 font-serif font-semibold text-xs sm:text-sm border-2 border-white/80 transition-transform active:scale-95"
+            className="bg-amber-500 hover:bg-amber-400 text-stone-950 px-5 py-2.5 rounded-full shadow-2xl flex items-center gap-2 font-serif font-semibold text-xs sm:text-sm border-2 border-white/80 transition-transform active:scale-95 whitespace-nowrap"
           >
-            <Sparkles className="w-4 h-4" />
+            <Sparkles className="w-4 h-4 shrink-0" />
             <span>[{activeNearbyHotspot.title}] {activeNearbyHotspot.id === 'bell' ? '타종하기' : '체험 시작'}</span>
             <span className="text-[11px] bg-stone-900 text-white px-2 py-0.5 rounded-full font-mono">
               클릭 / [E]키
@@ -1460,7 +1661,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
       {/* Yeonhwajeong Chair Sit / Stand Button (연화정 마당 의자 앉기 / 일어나기) */}
       {(isNearYeonhwajeongChairs || isSittingOnChair) && (
-        <div className="absolute top-38 left-1/2 -translate-x-1/2 z-25 pointer-events-auto">
+        <div className="absolute top-44 sm:top-38 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
           <button
             onClick={toggleSitOnChair}
             className={`px-5 py-2.5 rounded-full shadow-2xl flex items-center gap-2 font-serif font-semibold text-xs sm:text-sm border-2 transition-all active:scale-95 ${
