@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-const GOLDEN_BUDDHA_GLB_URL = '/assets/golden_buddha_simp_mesh.glb';
+const GOLDEN_BUDDHA_GLB_URL = '/assets/golden_buddha_v2_simp_mesh.glb';
 const TARGET_STATUE_HEIGHT = 5.5; // Fits atop y=2.25 altar (4.6m deep) with clearance under y=8.8 ceiling beam
 
 let cachedBuddhaTemplatePromise: Promise<THREE.Group> | null = null;
