@@ -1,10 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-const GOLDEN_BUDDHA_GLB_URL = '/assets/golden_buddha_pbr.glb';
-const DRACO_DECODER_PATH = '/draco/gltf/';
+const GOLDEN_BUDDHA_GLB_URL = '/assets/golden_buddha_simp_mesh.glb';
 const TARGET_STATUE_HEIGHT = 5.5; // Fits atop y=2.25 altar (4.6m deep) with clearance under y=8.8 ceiling beam
 
 let cachedBuddhaTemplatePromise: Promise<THREE.Group> | null = null;
@@ -33,8 +32,8 @@ function createWarmGlowSpriteTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Loads, normalizes, and caches `/assets/golden_buddha_pbr.glb` (Draco-compressed PBR) once
- * so sanctuary switches reuse the decoded geometry and PBR textures instantaneously.
+ * Loads, normalizes, and caches `/assets/golden_buddha_simp_mesh.glb` (Meshoptimizer-compressed PBR)
+ * once so sanctuary switches reuse the decoded geometry and PBR textures instantaneously.
  */
 function loadGoldenBuddhaTemplate(): Promise<THREE.Group> {
   if (cachedBuddhaTemplatePromise) {
@@ -42,79 +41,81 @@ function loadGoldenBuddhaTemplate(): Promise<THREE.Group> {
   }
 
   cachedBuddhaTemplatePromise = new Promise<THREE.Group>((resolve, reject) => {
-    const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
-
     const loader = new GLTFLoader();
-    loader.setDRACOLoader(dracoLoader);
+    loader.setMeshoptDecoder(MeshoptDecoder);
 
-    loader.load(
-      GOLDEN_BUDDHA_GLB_URL,
-      (gltf) => {
-        dracoLoader.dispose();
-        const rawRoot = gltf.scene;
-        const processedMats = new Map<THREE.Material, THREE.Material>();
+    Promise.resolve(MeshoptDecoder.ready)
+      .then(() => {
+        loader.load(
+          GOLDEN_BUDDHA_GLB_URL,
+          (gltf) => {
+            const rawRoot = gltf.scene;
+            const processedMats = new Map<THREE.Material, THREE.Material>();
 
-        rawRoot.traverse((child) => {
-          if (!(child instanceof THREE.Mesh)) return;
+            rawRoot.traverse((child) => {
+              if (!(child instanceof THREE.Mesh)) return;
 
-          // Only compute normals if a mesh lacks them; preserve baked PBR normals + tangent normalMap
-          if (child.geometry && !child.geometry.attributes.normal) {
-            const oldGeo = child.geometry;
-            child.geometry = toCreasedNormals(oldGeo, Math.PI / 5);
-            oldGeo.dispose();
+              // Only compute normals if a mesh lacks them; preserve baked PBR normals + tangent normalMap
+              if (child.geometry && !child.geometry.attributes.normal) {
+                const oldGeo = child.geometry;
+                child.geometry = toCreasedNormals(oldGeo, Math.PI / 5);
+                oldGeo.dispose();
+              }
+
+              child.castShadow = true;
+              child.receiveShadow = true;
+
+              const enhanceMaterial = (srcMat: THREE.Material): THREE.Material => {
+                const cached = processedMats.get(srcMat);
+                if (cached) return cached;
+
+                const mat = srcMat.clone();
+                if (mat instanceof THREE.MeshStandardMaterial) {
+                  mat.flatShading = false;
+                  mat.envMapIntensity = 1.4;
+                  mat.needsUpdate = true;
+                }
+                processedMats.set(srcMat, mat);
+                return mat;
+              };
+
+              if (Array.isArray(child.material)) {
+                child.material = child.material.map(enhanceMaterial);
+              } else if (child.material) {
+                child.material = enhanceMaterial(child.material);
+              }
+            });
+
+            rawRoot.updateMatrixWorld(true);
+            const box = new THREE.Box3().setFromObject(rawRoot);
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+
+            const uniformScale = TARGET_STATUE_HEIGHT / Math.max(0.01, size.y);
+
+            // Wrap in a bottom-centered container so pedestal rests flush on the altar top (y = 0)
+            const normalizedWrapper = new THREE.Group();
+            rawRoot.scale.setScalar(uniformScale);
+            rawRoot.position.set(
+              -center.x * uniformScale,
+              -box.min.y * uniformScale,
+              -center.z * uniformScale
+            );
+            normalizedWrapper.add(rawRoot);
+
+            resolve(normalizedWrapper);
+          },
+          undefined,
+          (err) => {
+            cachedBuddhaTemplatePromise = null;
+            reject(err);
           }
-
-          child.castShadow = true;
-          child.receiveShadow = true;
-
-          const enhanceMaterial = (srcMat: THREE.Material): THREE.Material => {
-            const cached = processedMats.get(srcMat);
-            if (cached) return cached;
-
-            const mat = srcMat.clone();
-            if (mat instanceof THREE.MeshStandardMaterial) {
-              mat.flatShading = false;
-              mat.envMapIntensity = 1.4;
-              mat.needsUpdate = true;
-            }
-            processedMats.set(srcMat, mat);
-            return mat;
-          };
-
-          if (Array.isArray(child.material)) {
-            child.material = child.material.map(enhanceMaterial);
-          } else if (child.material) {
-            child.material = enhanceMaterial(child.material);
-          }
-        });
-
-        rawRoot.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(rawRoot);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-
-        const uniformScale = TARGET_STATUE_HEIGHT / Math.max(0.01, size.y);
-
-        // Wrap in a bottom-centered container so pedestal rests flush on the altar top (y = 0)
-        const normalizedWrapper = new THREE.Group();
-        rawRoot.scale.setScalar(uniformScale);
-        rawRoot.position.set(
-          -center.x * uniformScale,
-          -box.min.y * uniformScale,
-          -center.z * uniformScale
         );
-        normalizedWrapper.add(rawRoot);
-
-        resolve(normalizedWrapper);
-      },
-      undefined,
-      (err) => {
-        dracoLoader.dispose();
+      })
+      .catch((err) => {
         cachedBuddhaTemplatePromise = null;
         reject(err);
-      }
-    );
+      });
   });
 
   return cachedBuddhaTemplatePromise;
@@ -122,7 +123,7 @@ function loadGoldenBuddhaTemplate(): Promise<THREE.Group> {
 
 /**
  * Builds the Main Dharma Hall Sanctuary Altar Assembly (대웅전 불단)
- * enshrining the `/assets/golden_buddha_pbr.glb` Golden Buddha Statue.
+ * enshrining the `/assets/golden_buddha_simp_mesh.glb` Golden Buddha Statue.
  */
 export function buildRealisticBuddhaAltar(woodMat: THREE.Material): THREE.Group {
   const assembly = new THREE.Group();
@@ -165,7 +166,7 @@ export function buildRealisticBuddhaAltar(woodMat: THREE.Material): THREE.Group 
   buddhaMount.position.set(0, 2.25, -8.5);
   assembly.add(buddhaMount);
 
-  // Subtle temporary golden lotus plinth while Draco PBR GLB finishes streaming/decoding
+  // Subtle temporary golden lotus plinth while Meshoptimizer GLB finishes streaming/decoding
   const placeholderGeo = new THREE.CylinderGeometry(1.75, 1.95, 0.42, 32);
   const placeholderMat = new THREE.MeshStandardMaterial({
     color: 0xd4871f,
@@ -186,7 +187,7 @@ export function buildRealisticBuddhaAltar(woodMat: THREE.Material): THREE.Group 
       buddhaMount.add(statueInstance);
     })
     .catch((err) => {
-      console.error('Failed to load golden_buddha_pbr.glb:', err);
+      console.error('Failed to load golden_buddha_simp_mesh.glb:', err);
     });
 
   // 3. 4 Flanking Warm Glowing Spherical Lamps & Sanctuary Lighting Rig
