@@ -325,16 +325,28 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     return Math.max(hallElev, mountainElev);
   }, [calculateMountainHeight]);
 
-  // 4 Chairs in Yeonhwajeong around the central tea table (38, 42)
-  const YEONHWAJEONG_CHAIRS = [
-    { x: 41.5, z: 42.0, rotY: -Math.PI / 2, label: '동쪽 의자' },
-    { x: 38.0, z: 45.5, rotY: -Math.PI, label: '남쪽 의자' },
-    { x: 34.5, z: 42.0, rotY: Math.PI / 2, label: '서쪽 의자' },
-    { x: 38.0, z: 38.5, rotY: 0, label: '북쪽 의자' },
-  ];
+  // Tea Courtyards & 4 Chairs each:
+  // 1) Yeonhwajeong South-East (38, 42)
+  // 2) Dharma Hall Left Lawn (-33, -44)
+  // 3) Dharma Hall Right Lawn (33, -44)
+  const TEA_COURTYARD_CENTERS = [
+    { x: 38, z: 42, areaName: '연화정' },
+    { x: -33, z: -44, areaName: '대웅전 왼편 차담' },
+    { x: 33, z: -44, areaName: '대웅전 오른편 차담' },
+  ] as const;
+
+  const ALL_TEA_CHAIRS = TEA_COURTYARD_CENTERS.flatMap(({ x: cx, z: cz, areaName }) => [
+    { x: cx + 3.5, z: cz, rotY: -Math.PI / 2, label: '동쪽 의자', areaName, centerX: cx, centerZ: cz },
+    { x: cx, z: cz + 3.5, rotY: -Math.PI, label: '남쪽 의자', areaName, centerX: cx, centerZ: cz },
+    { x: cx - 3.5, z: cz, rotY: Math.PI / 2, label: '서쪽 의자', areaName, centerX: cx, centerZ: cz },
+    { x: cx, z: cz - 3.5, rotY: 0, label: '북쪽 의자', areaName, centerX: cx, centerZ: cz },
+  ]);
+
+  const walkTargetChairRef = useRef<(typeof ALL_TEA_CHAIRS)[number] | null>(null);
 
   // Smart Walk Navigation (벽에 막히지 않고 뚫린 길로 알아서 찾아가기)
   const walkToLocation = useCallback((locationId: 'dharma' | 'meditation' | 'bows108' | 'courtyard' | 'mindshare' | 'walking') => {
+    walkTargetChairRef.current = null;
     // Stand up if currently sitting
     if (isSittingOnChairRef.current) {
       isSittingOnChairRef.current = false;
@@ -399,6 +411,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         targetLabel = '연화정 마당 (차담 의자 착석)';
         finalAction = 'sitting';
         hotspotId = 'mindshare';
+        walkTargetChairRef.current = ALL_TEA_CHAIRS[3]; // Yeonhwajeong North chair
         queue.push(new THREE.Vector3(26, 0.0, 26));
         queue.push(new THREE.Vector3(38.0, 0.0, 38.5)); // North chair
         break;
@@ -444,7 +457,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     }
   }, [avatarAction, currentTempleId, getSurfaceElevation]);
 
-  // Toggle Sit on Yeonhwajeong Chair (연화정 의자 앉기 / 일어나기 기능)
+  // Toggle Sit on Nearest Tea Chair (근처 차담 의자 앉기 / 일어나기 기능)
   const toggleSitOnChair = useCallback(() => {
     if (isSittingOnChairRef.current) {
       // Stand up
@@ -457,10 +470,17 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       return;
     }
 
-    // Find closest chair
-    let closestChair = YEONHWAJEONG_CHAIRS[0];
+    // Cancel any ongoing auto-walk
+    waypointQueueRef.current = [];
+    setIsAutoWalking(false);
+    if (waypointMarkerRef.current) {
+      waypointMarkerRef.current.visible = false;
+    }
+
+    // Find closest chair across all 3 tea courtyards
+    let closestChair = ALL_TEA_CHAIRS[0];
     let minDist = Infinity;
-    for (const chair of YEONHWAJEONG_CHAIRS) {
+    for (const chair of ALL_TEA_CHAIRS) {
       const dist = Math.hypot(playerPos.current.x - chair.x, playerPos.current.z - chair.z);
       if (dist < minDist) {
         minDist = dist;
@@ -468,33 +488,64 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       }
     }
 
-    // If player is far away, walk directly to Yeonhwajeong chair
-    if (minDist > 14.0) {
-      walkToLocation('mindshare');
+    // If a chair is nearby (within 16m), immediately sit on it right there
+    if (minDist <= 16.0) {
+      const elev = getSurfaceElevation(closestChair.x, closestChair.z, currentTempleId);
+      playerPos.current.set(closestChair.x, elev, closestChair.z);
+      playerTargetPos.current.copy(playerPos.current);
+      playerTargetRotation.current = closestChair.rotY;
+      playerCurrentRotation.current = closestChair.rotY;
+
+      if (avatarRef.current) {
+        avatarRef.current.mesh.position.set(closestChair.x, elev, closestChair.z);
+        avatarRef.current.mesh.rotation.y = closestChair.rotY;
+        avatarRef.current.setAction('sitting');
+      }
+
+      isSittingOnChairRef.current = true;
+      setIsSittingOnChair(true);
+      setAvatarAction('sitting');
+
+      sound.playSingingBowl();
+      setClickMoveFeedback(`${closestChair.areaName} ${closestChair.label}에 앉아 따뜻한 차담을 나눕니다 🪑🍵`);
+      setTimeout(() => setClickMoveFeedback(null), 3200);
       return;
     }
 
-    // Immediately sit down on the nearest chair
-    const elev = getSurfaceElevation(closestChair.x, closestChair.z, currentTempleId);
-    playerPos.current.set(closestChair.x, elev, closestChair.z);
-    playerTargetPos.current.copy(playerPos.current);
-    playerTargetRotation.current = closestChair.rotY;
-    playerCurrentRotation.current = closestChair.rotY;
-
-    if (avatarRef.current) {
-      avatarRef.current.mesh.position.set(closestChair.x, elev, closestChair.z);
-      avatarRef.current.mesh.rotation.y = closestChair.rotY;
-      avatarRef.current.setAction('sitting');
+    // Otherwise walk smoothly to the closest tea space chair
+    const queue: THREE.Vector3[] = [];
+    const currentX = playerPos.current.x;
+    const currentZ = playerPos.current.z;
+    const isInsideHall =
+      (Math.abs(currentX) <= 20 && currentZ <= -33) ||
+      (currentX <= -32 && Math.abs(currentZ) <= 18) ||
+      (currentX >= 32 && Math.abs(currentZ) <= 18);
+    if (isInsideHall) {
+      queue.push(new THREE.Vector3(0, getSurfaceElevation(0, 8, currentTempleId), 8));
     }
 
-    isSittingOnChairRef.current = true;
-    setIsSittingOnChair(true);
-    setAvatarAction('sitting');
+    const elev = getSurfaceElevation(closestChair.x, closestChair.z, currentTempleId);
+    const dest = new THREE.Vector3(closestChair.x, elev, closestChair.z);
+    queue.push(dest);
 
-    sound.playSingingBowl();
-    setClickMoveFeedback(`연화정 ${closestChair.label}에 앉아 따뜻한 차담을 나눕니다 🪑🍵`);
-    setTimeout(() => setClickMoveFeedback(null), 3200);
-  }, [currentTempleId, getSurfaceElevation, walkToLocation]);
+    waypointQueueRef.current = queue;
+    walkTargetActionRef.current = 'sitting';
+    walkTargetLabelRef.current = `${closestChair.areaName} ${closestChair.label}`;
+    walkTargetHotspotRef.current = 'mindshare';
+    walkTargetChairRef.current = closestChair;
+
+    const firstWp = queue.shift()!;
+    playerTargetPos.current.copy(firstWp);
+
+    if (waypointMarkerRef.current) {
+      waypointMarkerRef.current.position.set(dest.x, dest.y + 0.05, dest.z);
+      waypointMarkerRef.current.visible = true;
+    }
+
+    setAvatarAction('idle');
+    avatarRef.current?.setAction('idle');
+    setIsAutoWalking(true);
+  }, [currentTempleId, getSurfaceElevation]);
 
   // Walk or switch sanctuary to meet a connected practitioner
   const goToPeer = useCallback(
@@ -751,6 +802,23 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     // Lotus Pond & Mind Sharing Courtyard (연화정 마당 - South-East)
     const mindCourtyard = builder.buildMindSharingCourtyard(38, 42);
     scene.add(mindCourtyard);
+
+    // Additional Tea & Mind Sharing Spaces on Left & Right Lawns next to Main Dharma Hall
+    const leftDharmaTea = builder.buildMindSharingCourtyard(-33, -44, {
+      title: '대웅전 왼편 차담 마당 (마음나누기)',
+      subTitle: '대웅전 옆 푸른 잔디밭 위 따뜻한 차담 & 도반들과 마음 나누기',
+      grassSize: 16,
+      hotspotRadius: 9.0,
+    });
+    scene.add(leftDharmaTea);
+
+    const rightDharmaTea = builder.buildMindSharingCourtyard(33, -44, {
+      title: '대웅전 오른편 차담 마당 (마음나누기)',
+      subTitle: '대웅전 옆 푸른 잔디밭 위 따뜻한 차담 & 도반들과 마음 나누기',
+      grassSize: 16,
+      hotspotRadius: 9.0,
+    });
+    scene.add(rightDharmaTea);
 
     // Bamboo Forest Trail (죽림 포행로 - North-East)
     const bambooTrail = builder.buildBambooForestTrail(54, -38);
@@ -1179,13 +1247,19 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
                 sound.playMoktak();
                 setAutoWalkMessage('108배 정진전 방석에서 참회 정진을 시작합니다 🙏');
               } else if (action === 'sitting') {
+                const targetChair = walkTargetChairRef.current;
+                const chairRot = targetChair ? targetChair.rotY : 0;
+                const chairMsg = targetChair
+                  ? `${targetChair.areaName} ${targetChair.label}에 앉아 따뜻한 차담을 나눕니다 🪑🍵`
+                  : '차담 의자에 앉아 따뜻한 차담을 나눕니다 🪑🍵';
+                walkTargetChairRef.current = null;
                 isSittingOnChairRef.current = true;
                 setIsSittingOnChair(true);
-                playerTargetRotation.current = 0; // face table
-                playerCurrentRotation.current = 0;
-                avatar.mesh.rotation.y = 0;
+                playerTargetRotation.current = chairRot; // face tea table
+                playerCurrentRotation.current = chairRot;
+                avatar.mesh.rotation.y = chairRot;
                 sound.playSingingBowl();
-                setAutoWalkMessage('연화정 의자에 앉아 따뜻한 차담을 나눕니다 🪑🍵');
+                setAutoWalkMessage(chairMsg);
               } else {
                 const label = walkTargetLabelRef.current || '목적지';
                 setAutoWalkMessage(`${label}에 도착했습니다 🙏`);
@@ -1321,9 +1395,10 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         setActiveNearbyHotspot(nearestSpot);
       }
 
-      // Proximity to Yeonhwajeong chairs for sitting prompt (at 38, 42)
-      const distToChairs = Math.hypot(playerPos.current.x - 38, playerPos.current.z - 42);
-      const isNearChairs = distToChairs < 8.5;
+      // Proximity to any Tea Courtyard chairs (Yeonhwajeong + Dharma Hall left/right lawns)
+      const isNearChairs = TEA_COURTYARD_CENTERS.some(
+        (center) => Math.hypot(playerPos.current.x - center.x, playerPos.current.z - center.z) < 9.5
+      );
       if (isNearChairs !== isNearChairsRef.current) {
         isNearChairsRef.current = isNearChairs;
         setIsNearYeonhwajeongChairs(isNearChairs);
@@ -1675,7 +1750,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
             }`}
           >
             <Sparkles className="w-4 h-4 text-amber-300" />
-            <span>{isSittingOnChair ? '🚶 의자에서 일어나기' : '🪑 연화정 의자에 앉기 (차담)'}</span>
+            <span>{isSittingOnChair ? '🚶 의자에서 일어나기' : '🪑 차담 의자에 앉기'}</span>
             <span className="text-[11px] bg-stone-900/90 text-amber-300 px-2 py-0.5 rounded-full font-mono">
               클릭 / [F]키
             </span>
@@ -1787,51 +1862,29 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
                   onClick={() => {
                     if (act.id === 'sitting') {
                       toggleSitOnChair();
-                    } else if (act.id === 'meditating') {
-                      if (isSittingOnChairRef.current) {
-                        isSittingOnChairRef.current = false;
-                        setIsSittingOnChair(false);
-                      }
-                      const distToMedHall = Math.hypot(playerPos.current.x - (-48), playerPos.current.z);
-                      if (distToMedHall <= 30 && avatarRef.current) {
-                        playerPos.current.set(-48, 0.88, 0);
-                        playerTargetPos.current.copy(playerPos.current);
-                        playerTargetRotation.current = Math.PI / 2;
-                        playerCurrentRotation.current = Math.PI / 2;
-                        avatarRef.current.mesh.position.copy(playerPos.current);
-                        avatarRef.current.mesh.rotation.y = Math.PI / 2;
-                        setAvatarAction('meditating');
-                        avatarRef.current.setAction('meditating');
-                        sound.playSingingBowl();
-                      } else {
-                        walkToLocation('meditation');
-                      }
+                      return;
+                    }
+
+                    // Cancel sitting / auto-walk and perform the selected posture right in place
+                    if (isSittingOnChairRef.current) {
+                      isSittingOnChairRef.current = false;
+                      setIsSittingOnChair(false);
+                    }
+                    waypointQueueRef.current = [];
+                    walkTargetChairRef.current = null;
+                    setIsAutoWalking(false);
+                    playerTargetPos.current.copy(playerPos.current);
+                    if (waypointMarkerRef.current) {
+                      waypointMarkerRef.current.visible = false;
+                    }
+
+                    setAvatarAction(act.id);
+                    avatarRef.current?.setAction(act.id);
+
+                    if (act.id === 'meditating') {
+                      sound.playSingingBowl();
                     } else if (act.id === 'bowing') {
-                      if (isSittingOnChairRef.current) {
-                        isSittingOnChairRef.current = false;
-                        setIsSittingOnChair(false);
-                      }
-                      const distToBowsHall = Math.hypot(playerPos.current.x - 48, playerPos.current.z);
-                      if (distToBowsHall <= 30 && avatarRef.current) {
-                        playerPos.current.set(48, 0.75, 0);
-                        playerTargetPos.current.copy(playerPos.current);
-                        playerTargetRotation.current = -Math.PI / 2;
-                        playerCurrentRotation.current = -Math.PI / 2;
-                        avatarRef.current.mesh.position.copy(playerPos.current);
-                        avatarRef.current.mesh.rotation.y = -Math.PI / 2;
-                        setAvatarAction('bowing');
-                        avatarRef.current.setAction('bowing');
-                        sound.playMoktak();
-                      } else {
-                        walkToLocation('bows108');
-                      }
-                    } else {
-                      if (isSittingOnChairRef.current) {
-                        isSittingOnChairRef.current = false;
-                        setIsSittingOnChair(false);
-                      }
-                      setAvatarAction(act.id);
-                      avatarRef.current?.setAction(act.id);
+                      sound.playMoktak();
                     }
                   }}
                   className={`px-2.5 py-1 rounded-lg text-xs font-serif transition-all ${

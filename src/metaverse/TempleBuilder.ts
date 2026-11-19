@@ -175,6 +175,20 @@ export class TempleBuilder {
       courtyard.add(step);
     }
 
+    // Branch paths to Left & Right Dharma Hall Lawn Tea Spaces ((-33, -44) and (33, -44))
+    for (const dir of [-1, 1]) {
+      for (let i = 0; i <= 5; i++) {
+        const t = i / 5;
+        const px = THREE.MathUtils.lerp(dir * 16, dir * 28, t);
+        const pz = THREE.MathUtils.lerp(-30, -41, t);
+        const stepGeo = new THREE.CylinderGeometry(0.95, 1.05, 0.08, 10);
+        const step = new THREE.Mesh(stepGeo, stepMat);
+        step.position.set(px, 0.05, pz);
+        step.receiveShadow = true;
+        courtyard.add(step);
+      }
+    }
+
     // 3. Wildflowers in the grass
     const flowerMatYellow = new THREE.MeshStandardMaterial({ color: 0xfef08a, roughness: 0.4 });
     const flowerMatPink = new THREE.MeshStandardMaterial({ color: 0xfbcfe8, roughness: 0.4 });
@@ -616,15 +630,26 @@ export class TempleBuilder {
    * Lotus Pavilion Courtyard (연화정 마당 - 차담과 마음나누기)
    * Open peaceful green lawn with tea table and chairs for heartfelt sharing
    */
-  public buildMindSharingCourtyard(x: number, z: number): THREE.Group {
+  public buildMindSharingCourtyard(
+    x: number,
+    z: number,
+    options?: {
+      title?: string;
+      subTitle?: string;
+      grassSize?: number;
+      hotspotRadius?: number;
+    }
+  ): THREE.Group {
     const courtyard = new THREE.Group();
     courtyard.position.set(x, 0, z);
 
-    // 1. Seamless Green Lawn Grass (34m x 34m)
-    const grassGeo = new THREE.PlaneGeometry(36, 36);
+    const grassSize = options?.grassSize ?? 36;
+
+    // 1. Seamless Green Lawn Grass
+    const grassGeo = new THREE.PlaneGeometry(grassSize, grassSize);
     grassGeo.rotateX(-Math.PI / 2);
     const grass = new THREE.Mesh(grassGeo, this.grassMat);
-    grass.position.y = 0.035;
+    grass.position.y = 0.036;
     grass.receiveShadow = true;
     courtyard.add(grass);
 
@@ -724,10 +749,10 @@ export class TempleBuilder {
     // Interactive Hotspot (centered at the table)
     this.hotspots.push({
       id: 'mindshare',
-      title: '연화정 마당 (차담과 마음나누기)',
-      subTitle: '푸른 잔디 위 따뜻한 차담 & 도반들과 마음 나누기',
+      title: options?.title ?? '연화정 마당 (차담과 마음나누기)',
+      subTitle: options?.subTitle ?? '푸른 잔디 위 따뜻한 차담 & 도반들과 마음 나누기',
       position: new THREE.Vector3(x, 1.2, z),
-      radius: 13.0,
+      radius: options?.hotspotRadius ?? 13.0,
     });
 
     return courtyard;
