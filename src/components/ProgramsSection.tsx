@@ -10,6 +10,13 @@ import {
 } from '../data/programsData';
 import { sound } from '../utils/soundEngine';
 import {
+  fetchSharedMindPosts,
+  loadLocalCachedMindPosts,
+  submitSharedMindPost,
+  cheerSharedMindPost,
+  subscribeMindShareBroadcast,
+} from '../utils/mindShareApi';
+import {
   Play,
   Pause,
   RotateCcw,
@@ -208,17 +215,7 @@ export const ProgramsSection: React.FC<ProgramsSectionProps> = ({
   // ==========================================
   // 4. MIND SHARING STATE (도반 마음나누기)
   // ==========================================
-  const [mindPosts, setMindPosts] = useState<MindSharePost[]>(() => {
-    const saved = localStorage.getItem('jungto_mind_posts');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return INITIAL_MIND_POSTS;
-      }
-    }
-    return INITIAL_MIND_POSTS;
-  });
+  const [mindPosts, setMindPosts] = useState<MindSharePost[]>(() => loadLocalCachedMindPosts());
 
   const [newAuthor, setNewAuthor] = useState('');
   const [newLocation, setNewLocation] = useState('수련원 묵언스테이');
@@ -226,24 +223,39 @@ export const ProgramsSection: React.FC<ProgramsSectionProps> = ({
   const [newContent, setNewContent] = useState('');
   const [postSuccessMessage, setPostSuccessMessage] = useState(false);
 
-  const handleAddPost = (e: React.FormEvent) => {
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      const latest = await fetchSharedMindPosts();
+      if (active) setMindPosts(latest);
+    };
+    void refresh();
+    const timer = setInterval(() => {
+      if (activeProgramId === 'mindshare') {
+        void refresh();
+      }
+    }, 4000);
+    const unsubBc = subscribeMindShareBroadcast(() => {
+      void refresh();
+    });
+    return () => {
+      active = false;
+      clearInterval(timer);
+      unsubBc();
+    };
+  }, [activeProgramId]);
+
+  const handleAddPost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newContent.trim()) return;
 
-    const newPost: MindSharePost = {
-      id: `post-${Date.now()}`,
-      author: newAuthor.trim() ? `${newAuthor.trim()} 도반` : '이름없는 도반',
+    const updated = await submitSharedMindPost({
+      author: newAuthor.trim(),
       templeStayLocation: newLocation,
       emotionTag: newEmotion,
       content: newContent.trim(),
-      timestamp: '방금 전',
-      lotusCount: 1,
-      hasUserCheered: true,
-    };
-
-    const updated = [newPost, ...mindPosts];
+    });
     setMindPosts(updated);
-    localStorage.setItem('jungto_mind_posts', JSON.stringify(updated));
 
     setNewContent('');
     setNewAuthor('');
@@ -252,20 +264,10 @@ export const ProgramsSection: React.FC<ProgramsSectionProps> = ({
     setTimeout(() => setPostSuccessMessage(false), 3000);
   };
 
-  const handleCheerLotus = (postId: string) => {
-    const updated = mindPosts.map((post) => {
-      if (post.id === postId) {
-        const nextCheered = !post.hasUserCheered;
-        return {
-          ...post,
-          lotusCount: nextCheered ? post.lotusCount + 1 : post.lotusCount - 1,
-          hasUserCheered: nextCheered,
-        };
-      }
-      return post;
-    });
+  const handleCheerLotus = async (postId: string) => {
+    const target = mindPosts.find((p) => p.id === postId);
+    const updated = await cheerSharedMindPost(postId, Boolean(target?.hasUserCheered));
     setMindPosts(updated);
-    localStorage.setItem('jungto_mind_posts', JSON.stringify(updated));
     sound.playMoktak();
   };
 

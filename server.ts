@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI } from '@google/genai';
+import { GET as handleGetMindShares, POST as handlePostMindShares } from './api/mind-shares.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -635,6 +636,32 @@ async function startServer() {
       onlineCount: getActivePlayers().length,
       maxUsers: MAX_CONCURRENT_USERS,
     });
+  });
+
+  app.get('/api/mind-shares', async (_req, res) => {
+    try {
+      const apiRes = await handleGetMindShares();
+      const body = await apiRes.text();
+      res.status(apiRes.status).type('application/json').send(body);
+    } catch {
+      res.status(500).json({ error: 'MIND_SHARES_LOAD_FAILED' });
+    }
+  });
+
+  app.post('/api/mind-shares', async (req, res) => {
+    try {
+      const apiRes = await handlePostMindShares(
+        new Request('http://localhost/api/mind-shares', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req.body ?? {}),
+        })
+      );
+      const body = await apiRes.text();
+      res.status(apiRes.status).type('application/json').send(body);
+    } catch {
+      res.status(500).json({ error: 'MIND_SHARES_SAVE_FAILED' });
+    }
   });
 
   ensureTtsCacheDir();

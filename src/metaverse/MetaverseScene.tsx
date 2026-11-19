@@ -2129,6 +2129,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         programId={activeModal}
         onClose={() => setActiveModal(null)}
         templeId={currentTempleId}
+        defaultAuthor={nickname}
       />
 
     </div>

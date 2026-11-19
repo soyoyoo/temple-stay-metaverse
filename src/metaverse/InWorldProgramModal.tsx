@@ -10,6 +10,13 @@ import {
 } from '../data/programsData';
 import { sound } from '../utils/soundEngine';
 import {
+  fetchSharedMindPosts,
+  loadLocalCachedMindPosts,
+  submitSharedMindPost,
+  cheerSharedMindPost,
+  subscribeMindShareBroadcast,
+} from '../utils/mindShareApi';
+import {
   X,
   Play,
   Pause,
@@ -23,18 +30,21 @@ import {
   Check,
   Footprints,
   Compass,
+  RefreshCw,
 } from 'lucide-react';
 
 interface InWorldProgramModalProps {
   programId: 'meditation' | 'bows108' | 'dharma' | 'mindshare' | 'walking' | 'booking' | null;
   onClose: () => void;
   templeId: 'seocho' | 'mungyeong' | 'jukrim';
+  defaultAuthor?: string;
 }
 
 export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
   programId,
   onClose,
   templeId,
+  defaultAuthor,
 }) => {
   // 1. Meditation state
   const [medDuration, setMedDuration] = useState(300);
@@ -66,22 +76,21 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
   const [showFullTranscript, setShowFullTranscript] = useState(false);
   const [copiedQuote, setCopiedQuote] = useState(false);
 
-  // 4. Mind Sharing state
-  const [mindPosts, setMindPosts] = useState<MindSharePost[]>(() => {
-    const saved = localStorage.getItem('jungto_mind_posts');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return INITIAL_MIND_POSTS;
-      }
+  // 4. Mind Sharing state (synced with shared backend / Redis)
+  const [mindPosts, setMindPosts] = useState<MindSharePost[]>(() => loadLocalCachedMindPosts());
+  const [newAuthor, setNewAuthor] = useState(() => {
+    if (defaultAuthor && defaultAuthor.trim()) return defaultAuthor.trim();
+    try {
+      return localStorage.getItem('jungto_user_nickname') || '';
+    } catch {
+      return '';
     }
-    return INITIAL_MIND_POSTS;
   });
-  const [newAuthor, setNewAuthor] = useState('');
   const [newEmotion, setNewEmotion] = useState<'평온' | '감사' | '알아차림' | '내려놓음' | '참회'>('평온');
   const [newContent, setNewContent] = useState('');
   const [postSuccess, setPostSuccess] = useState(false);
+  const [isMindLoading, setIsMindLoading] = useState(false);
+  const [isMindSubmitting, setIsMindSubmitting] = useState(false);
 
   // 5. Walking state (synced with global SoundEngine moktak pacer)
   const [isWalkingPacing, setIsWalkingPacing] = useState(() => sound.isMoktakPacing());
@@ -195,6 +204,37 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
     };
   }, [isWalkingPacing]);
 
+  useEffect(() => {
+    if (defaultAuthor && defaultAuthor.trim() && !newAuthor.trim()) {
+      setNewAuthor(defaultAuthor.trim());
+    }
+  }, [defaultAuthor, newAuthor]);
+
+  useEffect(() => {
+    if (programId !== 'mindshare') return;
+    let active = true;
+    const refresh = async (showSpinner = false) => {
+      if (showSpinner) setIsMindLoading(true);
+      const latest = await fetchSharedMindPosts();
+      if (active) {
+        setMindPosts(latest);
+        if (showSpinner) setIsMindLoading(false);
+      }
+    };
+    void refresh(true);
+    const timer = setInterval(() => {
+      void refresh(false);
+    }, 3000);
+    const unsubBc = subscribeMindShareBroadcast(() => {
+      void refresh(false);
+    });
+    return () => {
+      active = false;
+      clearInterval(timer);
+      unsubBc();
+    };
+  }, [programId]);
+
   if (!programId) return null;
 
   const formatTime = (sec: number) => {
@@ -213,9 +253,9 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
     }
   };
 
-  const handlePostMind = (e: React.FormEvent) => {
+  const handlePostMind = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newContent.trim()) return;
+    if (!newContent.trim() || isMindSubmitting) return;
 
     const templeNames = {
       mungyeong: '수련원 3D 도량',
@@ -223,42 +263,29 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
       jukrim: 'J 정사 3D 도량',
     };
 
-    const newPost: MindSharePost = {
-      id: `post-${Date.now()}`,
-      author: newAuthor.trim() ? `${newAuthor.trim()} 도반` : '이름없는 도반',
-      templeStayLocation: templeNames[templeId],
-      emotionTag: newEmotion,
-      content: newContent.trim(),
-      timestamp: '방금 전',
-      lotusCount: 1,
-      hasUserCheered: true,
-    };
-
-    const updated = [newPost, ...mindPosts];
-    setMindPosts(updated);
-    localStorage.setItem('jungto_mind_posts', JSON.stringify(updated));
-
-    setNewContent('');
-    setNewAuthor('');
-    setPostSuccess(true);
-    sound.playSingingBowl();
-    setTimeout(() => setPostSuccess(false), 3000);
+    setIsMindSubmitting(true);
+    try {
+      const updated = await submitSharedMindPost({
+        author: newAuthor.trim() || defaultAuthor?.trim() || '',
+        templeStayLocation: templeNames[templeId],
+        emotionTag: newEmotion,
+        content: newContent.trim(),
+      });
+      setMindPosts(updated);
+      setNewContent('');
+      setPostSuccess(true);
+      sound.playSingingBowl();
+      setTimeout(() => setPostSuccess(false), 3000);
+    } finally {
+      setIsMindSubmitting(false);
+    }
   };
 
-  const handleCheerLotus = (id: string) => {
-    const updated = mindPosts.map((p) => {
-      if (p.id === id) {
-        const next = !p.hasUserCheered;
-        return {
-          ...p,
-          lotusCount: next ? p.lotusCount + 1 : p.lotusCount - 1,
-          hasUserCheered: next,
-        };
-      }
-      return p;
-    });
+  const handleCheerLotus = async (id: string) => {
+    const target = mindPosts.find((p) => p.id === id);
+    const currentlyCheered = Boolean(target?.hasUserCheered);
+    const updated = await cheerSharedMindPost(id, currentlyCheered);
     setMindPosts(updated);
-    localStorage.setItem('jungto_mind_posts', JSON.stringify(updated));
   };
 
   const handleBookingSubmit = (e: React.FormEvent) => {
@@ -645,29 +672,65 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
                 />
 
                 <div className="flex justify-between items-center">
-                  <span className="text-[11px] text-stone-400">평가 없이 온전히 경청합니다</span>
+                  {postSuccess ? (
+                    <span className="text-[11px] text-emerald-700 font-serif font-medium">
+                      도반들과 소중한 마음이 함께 나뉘었습니다 🙏
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-stone-400">
+                      등록한 글은 함께 접속한 도반들에게도 실시간 공유됩니다
+                    </span>
+                  )}
                   <button
                     type="submit"
-                    className="px-4 py-1.5 bg-stone-900 text-white text-xs rounded-lg hover:bg-stone-800"
+                    disabled={isMindSubmitting}
+                    className="px-4 py-1.5 bg-stone-900 text-white text-xs rounded-lg hover:bg-stone-800 disabled:opacity-60"
                   >
-                    나눔 등록
+                    {isMindSubmitting ? '등록 중...' : '나눔 등록'}
                   </button>
                 </div>
               </form>
 
+              {/* Feed Header */}
+              <div className="flex items-center justify-between px-0.5">
+                <span className="text-xs font-serif font-medium text-stone-600">
+                  함께 나눈 도반들의 마음 ({mindPosts.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsMindLoading(true);
+                    const latest = await fetchSharedMindPosts();
+                    setMindPosts(latest);
+                    setIsMindLoading(false);
+                  }}
+                  className="text-[11px] text-stone-500 hover:text-stone-900 flex items-center gap-1 font-serif"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isMindLoading ? 'animate-spin' : ''}`} />
+                  <span>새로고침</span>
+                </button>
+              </div>
+
               {/* Feed */}
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {mindPosts.slice(0, 4).map((p) => (
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {mindPosts.map((p) => (
                   <div key={p.id} className="p-3 bg-white border border-stone-200 rounded-xl text-xs space-y-1">
-                    <div className="flex justify-between text-[11px] text-stone-500 font-serif">
-                      <span><strong>{p.author}</strong> · #{p.emotionTag}</span>
-                      <span>{p.timestamp}</span>
+                    <div className="flex justify-between items-center gap-2 text-[11px] text-stone-500 font-serif">
+                      <span className="truncate">
+                        <strong className="text-stone-800">{p.author}</strong> · {p.templeStayLocation} · <span className="text-amber-800">#{p.emotionTag}</span>
+                      </span>
+                      <span className="shrink-0">{p.timestamp}</span>
                     </div>
-                    <p className="text-stone-700 font-sans leading-relaxed">{p.content}</p>
+                    <p className="text-stone-700 font-sans leading-relaxed whitespace-pre-line">{p.content}</p>
                     <div className="flex justify-end pt-1">
                       <button
-                        onClick={() => handleCheerLotus(p.id)}
-                        className="text-[11px] flex items-center gap-1 font-serif text-amber-800"
+                        type="button"
+                        onClick={() => void handleCheerLotus(p.id)}
+                        className={`text-[11px] flex items-center gap-1 font-serif px-2 py-0.5 rounded-md transition-colors ${
+                          p.hasUserCheered
+                            ? 'bg-amber-100/80 text-amber-900 font-medium'
+                            : 'text-amber-800 hover:bg-amber-50'
+                        }`}
                       >
                         <Sparkles className="w-3 h-3 text-amber-600" />
                         <span>연꽃 공감 {p.lotusCount}</span>
