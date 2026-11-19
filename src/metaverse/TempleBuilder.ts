@@ -7,6 +7,7 @@ import {
   createDancheongPatternTexture,
   createLawnGrassTexture,
 } from './ProceduralTextures';
+import { buildRealisticBuddhaAltar } from './BuddhaStatueBuilder';
 
 export interface InteractiveHotspot {
   id: 'dharma' | 'meditation' | 'bows108' | 'mindshare' | 'walking' | 'bell';
@@ -72,15 +73,6 @@ export class TempleBuilder {
     roughness: 0.7,
     transparent: true,
     opacity: 0.88,
-  });
-
-  // Radiant Golden Buddha Material (금동 부처님 상)
-  private pureGoldMat = new THREE.MeshStandardMaterial({
-    color: 0xf5c338,
-    roughness: 0.22,
-    metalness: 0.9,
-    emissive: 0x8a6208,
-    emissiveIntensity: 0.2,
   });
 
   private bronzeMat = new THREE.MeshStandardMaterial({
@@ -314,90 +306,8 @@ export class TempleBuilder {
     ridge.castShadow = true;
     hall.add(ridge);
 
-    // 6. MAGNIFICENT GOLDEN BUDDHA STATUE (금색 부처님 상)
-    // Altar Table
-    const altarGeo = new THREE.BoxGeometry(10.0, 1.4, 3.8);
-    const altar = new THREE.Mesh(altarGeo, this.woodMat);
-    altar.position.set(0, 1.5, -8.5);
-    altar.castShadow = true;
-    hall.add(altar);
-
-    // Buddha Group
-    const goldenBuddha = new THREE.Group();
-    goldenBuddha.position.set(0, 2.2, -8.5);
-
-    // Multi-tier Golden Lotus Throne (황금 연화대좌)
-    const lotusBaseGeo = new THREE.CylinderGeometry(2.4, 2.9, 1.0, 24);
-    const lotusBase = new THREE.Mesh(lotusBaseGeo, this.pureGoldMat);
-    goldenBuddha.add(lotusBase);
-
-    // Carved Golden Lotus Petals
-    const petalGeo = new THREE.ConeGeometry(0.55, 0.7, 6);
-    for (let i = 0; i < 20; i++) {
-      const angle = (i / 20) * Math.PI * 2;
-      const petal = new THREE.Mesh(petalGeo, this.pureGoldMat);
-      petal.position.set(Math.cos(angle) * 2.7, 0.1, Math.sin(angle) * 2.7);
-      petal.rotation.z = Math.PI / 3;
-      petal.rotation.y = angle + Math.PI / 2;
-      goldenBuddha.add(petal);
-    }
-
-    // Seated Lower Body (결가부좌)
-    const legsGeo = new THREE.CylinderGeometry(2.1, 2.5, 1.1, 16);
-    legsGeo.scale(1.25, 1.0, 0.85);
-    const legs = new THREE.Mesh(legsGeo, this.pureGoldMat);
-    legs.position.y = 1.0;
-    goldenBuddha.add(legs);
-
-    // Golden Torso
-    const torsoGeo = new THREE.CylinderGeometry(1.3, 1.7, 2.6, 16);
-    const torso = new THREE.Mesh(torsoGeo, this.pureGoldMat);
-    torso.position.y = 2.7;
-    goldenBuddha.add(torso);
-
-    // Mudra Arms (항마촉지인)
-    const armGeo = new THREE.CylinderGeometry(0.35, 0.4, 1.9, 10);
-    const armR = new THREE.Mesh(armGeo, this.pureGoldMat);
-    armR.position.set(1.4, 2.4, 0.5);
-    armR.rotation.z = -0.38;
-    armR.rotation.x = 0.45;
-    goldenBuddha.add(armR);
-
-    const armL = new THREE.Mesh(armGeo, this.pureGoldMat);
-    armL.position.set(-1.2, 2.1, 0.7);
-    armL.rotation.z = 0.5;
-    armL.rotation.x = 0.7;
-    goldenBuddha.add(armL);
-
-    // Buddha Head
-    const headGeo = new THREE.SphereGeometry(0.95, 20, 20);
-    const head = new THREE.Mesh(headGeo, this.pureGoldMat);
-    head.position.y = 4.9;
-    goldenBuddha.add(head);
-
-    const ushnishaGeo = new THREE.SphereGeometry(0.42, 16, 16);
-    const ushnisha = new THREE.Mesh(ushnishaGeo, this.pureGoldMat);
-    ushnisha.position.y = 5.75;
-    goldenBuddha.add(ushnisha);
-
-    // Radiant Golden Halo Mandorla (광배)
-    const haloGeo = new THREE.CylinderGeometry(3.6, 3.6, 0.12, 32);
-    haloGeo.rotateX(Math.PI / 2);
-    const halo = new THREE.Mesh(haloGeo, this.pureGoldMat);
-    halo.position.set(0, 4.5, -0.6);
-    goldenBuddha.add(halo);
-
-    const rayGeo = new THREE.TorusGeometry(3.2, 0.08, 8, 32);
-    const ray = new THREE.Mesh(rayGeo, this.pureGoldMat);
-    ray.position.set(0, 4.5, -0.5);
-    goldenBuddha.add(ray);
-
-    hall.add(goldenBuddha);
-
-    // Warm Altar Candlelight and Sacred Aura
-    const sacredAura = new THREE.PointLight(0xffd56b, 3.5, 25);
-    sacredAura.position.set(0, 6.0, -6.0);
-    hall.add(sacredAura);
+    // 6. HIGH-DETAIL REALISTIC ANTIQUE GILT-BRONZE BUDDHA STATUE & SANCTUARY ALTAR
+    hall.add(buildRealisticBuddhaAltar(this.woodMat));
 
     // Signboard: 大雄殿
     const plaqueGeo = new THREE.BoxGeometry(4.2, 1.4, 0.15);

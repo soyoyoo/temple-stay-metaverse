@@ -43,6 +43,7 @@ export class PlayerAvatar {
   // Animation clocks
   private walkCycle = 0;
   private actionTimer = 0;
+  private nickname = '수행자';
 
   constructor(robeColorHex = 0x82888f) {
     this.mesh = new THREE.Group();
@@ -283,45 +284,49 @@ export class PlayerAvatar {
     this.nameSprite.scale.set(1.5, 0.42, 1);
     this.mesh.add(this.nameSprite);
 
-    this.updateNametag('수행자 (나)');
+    this.refreshNametag();
+  }
+
+  public setNickname(nickname: string) {
+    const cleaned = nickname.trim().slice(0, 12);
+    this.nickname = cleaned || '수행자';
+    this.refreshNametag();
   }
 
   public setAction(action: AvatarActionType) {
     if (this.currentAction === action) return;
     this.currentAction = action;
     this.actionTimer = 0;
+    this.cushionGroup.visible = action === 'meditating';
+    this.refreshNametag();
+  }
 
-    // Update nametag label based on activity
-    switch (action) {
+  private refreshNametag() {
+    let label = `${this.nickname} (나)`;
+    switch (this.currentAction) {
       case 'meditating':
-        this.updateNametag('고요한 명상 중 🧘');
-        this.cushionGroup.visible = true;
+        label = `${this.nickname} · 명상 중 🧘`;
         break;
       case 'bowing':
-        this.updateNametag('108배 정진 중 🙏');
-        this.cushionGroup.visible = false;
+        label = `${this.nickname} · 108배 중 🙏`;
         break;
       case 'dharma':
-        this.updateNametag('대웅전 법문 경청 📿');
-        this.cushionGroup.visible = false;
+        label = `${this.nickname} · 법문 경청 📿`;
         break;
       case 'poheng':
-        this.updateNametag('묵언 포행 (산책) 🌿');
-        this.cushionGroup.visible = false;
+        label = `${this.nickname} · 묵언 포행 🌿`;
         break;
       case 'mindsharing':
-        this.updateNametag('마음나누기 🍵');
-        this.cushionGroup.visible = false;
+        label = `${this.nickname} · 마음나누기 🍵`;
         break;
       case 'sitting':
-        this.updateNametag('연화정 의자 차담 🪑');
-        this.cushionGroup.visible = false;
+        label = `${this.nickname} · 의자 차담 🪑`;
         break;
       default:
-        this.updateNametag('수행자 (나)');
-        this.cushionGroup.visible = false;
+        label = `${this.nickname} (나)`;
         break;
     }
+    this.updateNametag(label);
   }
 
   private updateNametag(label: string) {
@@ -329,6 +334,7 @@ export class PlayerAvatar {
     ctx.clearRect(0, 0, this.nameCanvas.width, this.nameCanvas.height);
 
     ctx.fillStyle = 'rgba(28, 25, 23, 0.85)';
+    ctx.beginPath();
     ctx.roundRect(10, 6, 260, 56, 18);
     ctx.fill();
 
@@ -337,10 +343,10 @@ export class PlayerAvatar {
     ctx.stroke();
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 20px "Noto Serif KR", serif';
+    ctx.font = label.length > 14 ? 'bold 17px "Noto Serif KR", serif' : 'bold 20px "Noto Serif KR", serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, 140, 34);
+    ctx.fillText(label.slice(0, 20), 140, 34);
 
     this.nameTex.needsUpdate = true;
   }

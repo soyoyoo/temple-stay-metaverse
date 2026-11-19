@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { TempleBuilder, InteractiveHotspot, CollisionBox } from './TempleBuilder';
 import { PlayerAvatar, AvatarActionType } from './PlayerAvatar';
 import { OtherPractitionersManager } from './OtherPractitioners';
+import { RemotePlayersManager } from './RemotePlayersManager';
+import { MultiplayerClient, RemotePlayerState } from './MultiplayerClient';
 import { InWorldProgramModal } from './InWorldProgramModal';
 import { sound } from '../utils/soundEngine';
 import {
-  Compass,
   Volume2,
   VolumeX,
   Sparkles,
@@ -15,7 +17,6 @@ import {
   Calendar,
   Footprints,
   Flame,
-  BookOpen,
   Eye,
   MousePointerClick,
   ChevronDown,
@@ -23,6 +24,7 @@ import {
   Users,
   ZoomIn,
   ZoomOut,
+  Settings,
 } from 'lucide-react';
 
 interface MetaverseSceneProps {
@@ -44,13 +46,36 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const [activeNearbyHotspot, setActiveNearbyHotspot] = useState<InteractiveHotspot | null>(null);
   const activeNearbyHotspotRef = useRef<InteractiveHotspot | null>(null);
   const [avatarAction, setAvatarAction] = useState<AvatarActionType>('idle');
+  const avatarActionRef = useRef<AvatarActionType>('idle');
   const avatarRef = useRef<PlayerAvatar | null>(null);
+
+  // Real-time Multi-user Nickname & Presence State (max 100 concurrent users)
+  const [nickname, setNickname] = useState<string>(() => {
+    return localStorage.getItem('jungto_user_nickname') || '';
+  });
+  const nicknameRef = useRef<string>(nickname || '수행자');
+  const [nicknameDraft, setNicknameDraft] = useState<string>(() => {
+    return localStorage.getItem('jungto_user_nickname') || '';
+  });
+  const [hasJoinedSession, setHasJoinedSession] = useState<boolean>(false);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [onlineCount, setOnlineCount] = useState<number>(1);
+  const [maxUsers, setMaxUsers] = useState<number>(100);
+  const [roomFullMessage, setRoomFullMessage] = useState<string | null>(null);
+
+  const mpClientRef = useRef<MultiplayerClient | null>(null);
+  const remotePlayersRef = useRef<RemotePlayersManager | null>(null);
+  const pendingRoomPlayersRef = useRef<RemotePlayerState[] | null>(null);
+  const currentTempleIdRef = useRef(currentTempleId);
 
   const [cameraMode, setCameraMode] = useState<'third' | 'first'>('third');
   const cameraModeRef = useRef<'third' | 'first'>('third');
   const [zoomPercent, setZoomPercent] = useState<number>(100);
   const [isWalkingAudioActive, setIsWalkingAudioActive] = useState<boolean>(
     () => sound.isMoktakPacing() || sound.isAmbientPlaying()
+  );
+  const [isDharmaAudioActive, setIsDharmaAudioActive] = useState<boolean>(
+    () => sound.isDharmaPlaying()
   );
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [isControlsCollapsed, setIsControlsCollapsed] = useState(false);
@@ -89,12 +114,106 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   }, [cameraMode]);
 
   useEffect(() => {
+    avatarActionRef.current = avatarAction;
+  }, [avatarAction]);
+
+  useEffect(() => {
+    currentTempleIdRef.current = currentTempleId;
+  }, [currentTempleId]);
+
+  useEffect(() => {
+    nicknameRef.current = nickname.trim() || '수행자';
+  }, [nickname]);
+
+  useEffect(() => {
     const syncSoundState = () => {
       setIsWalkingAudioActive(sound.isMoktakPacing() || sound.isAmbientPlaying());
+      setIsDharmaAudioActive(sound.isDharmaPlaying());
     };
     syncSoundState();
     return sound.subscribe(syncSoundState);
   }, []);
+
+  // Real-time WebSocket Multi-user Sync (Up to 100 concurrent users)
+  useEffect(() => {
+    if (!hasJoinedSession) return;
+
+    const client = new MultiplayerClient({
+      onInit: (players, total, limit) => {
+        setOnlineCount(total);
+        setMaxUsers(limit);
+        setRoomFullMessage(null);
+        pendingRoomPlayersRef.current = players;
+        remotePlayersRef.current?.syncAll(players);
+      },
+      onRoomSync: (players) => {
+        pendingRoomPlayersRef.current = players;
+        remotePlayersRef.current?.syncAll(players);
+      },
+      onPlayerJoined: (player) => {
+        remotePlayersRef.current?.addPlayer(player);
+      },
+      onPlayerUpdated: (update) => {
+        remotePlayersRef.current?.updatePlayerState(update);
+      },
+      onPlayerRenamed: (id, newName) => {
+        remotePlayersRef.current?.renamePlayer(id, newName);
+      },
+      onPlayerLeft: (id) => {
+        remotePlayersRef.current?.removePlayer(id);
+      },
+      onPresenceCount: (total, limit) => {
+        setOnlineCount(total);
+        setMaxUsers(limit);
+      },
+      onRoomFull: (message) => {
+        setRoomFullMessage(message);
+      },
+    });
+
+    mpClientRef.current = client;
+    client.connect(nicknameRef.current, {
+      templeId: currentTempleIdRef.current,
+      x: playerPos.current.x,
+      y: playerPos.current.y,
+      z: playerPos.current.z,
+      rotY: playerCurrentRotation.current,
+      action: avatarActionRef.current,
+      isMoving: false,
+    });
+
+    return () => {
+      client.dispose();
+      if (mpClientRef.current === client) {
+        mpClientRef.current = null;
+      }
+    };
+  }, [hasJoinedSession]);
+
+  const handleConfirmEntranceNickname = (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalNick = nicknameDraft.trim().slice(0, 12) || '수행자';
+    setNickname(finalNick);
+    setNicknameDraft(finalNick);
+    nicknameRef.current = finalNick;
+    localStorage.setItem('jungto_user_nickname', finalNick);
+    avatarRef.current?.setNickname(finalNick);
+    setHasJoinedSession(true);
+  };
+
+  const handleSaveSettingsNickname = (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalNick = nicknameDraft.trim().slice(0, 12) || '수행자';
+    setNickname(finalNick);
+    setNicknameDraft(finalNick);
+    nicknameRef.current = finalNick;
+    localStorage.setItem('jungto_user_nickname', finalNick);
+    avatarRef.current?.setNickname(finalNick);
+    mpClientRef.current?.sendNickname(finalNick);
+    setShowSettingsModal(false);
+    setClickMoveFeedback(`닉네임이 '${finalNick}'(으)로 변경되었습니다 ✨`);
+    setTimeout(() => setClickMoveFeedback(null), 2500);
+  };
 
   const adjustZoom = useCallback((delta: number, reset = false) => {
     const next = reset
@@ -401,6 +520,14 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     renderer.domElement.style.touchAction = 'none';
     container.replaceChildren(renderer.domElement);
 
+    // Environment IBL reflection map (enhances antique gilt-bronze Buddha statue sheen)
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    const roomEnv = new RoomEnvironment();
+    const envRenderTarget = pmremGenerator.fromScene(roomEnv, 0.04);
+    scene.environment = envRenderTarget.texture;
+    roomEnv.dispose();
+    pmremGenerator.dispose();
+
     // 4. Lighting Rig
     const sunLight = new THREE.DirectionalLight(0xfffaed, currentTheme.sunIntensity);
     sunLight.position.set(34, 52, 28);
@@ -535,16 +662,38 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     hotspotsRef.current = builder.hotspots;
     collisionBoxesRef.current = builder.collisionBoxes;
 
-    // 8. Other Practitioners (다중 접속 귀여운 동자승 및 도반 아바타들)
+    // 8. Ambient Practitioners & Live Connected Remote Players (최대 100명 동시 접속 도반)
     const otherPractitioners = new OtherPractitionersManager();
     scene.add(otherPractitioners.group);
 
-    // 9. Cute Novice Monk Player Avatar (귀여운 동자승 아바타)
+    const remotePlayers = new RemotePlayersManager();
+    scene.add(remotePlayers.group);
+    remotePlayersRef.current = remotePlayers;
+    if (pendingRoomPlayersRef.current) {
+      remotePlayers.syncAll(pendingRoomPlayersRef.current);
+    }
+
+    // 9. Player Avatar (커스텀 닉네임 수행자 아바타)
     const avatar = new PlayerAvatar();
     avatar.mesh.position.copy(playerPos.current);
-    avatar.setAction(avatarAction);
+    avatar.setNickname(nicknameRef.current);
+    avatar.setAction(avatarActionRef.current);
     scene.add(avatar.mesh);
     avatarRef.current = avatar;
+
+    // Notify server immediately on temple switch so room peers synchronize
+    mpClientRef.current?.sendState(
+      {
+        templeId: currentTempleId,
+        x: playerPos.current.x,
+        y: playerPos.current.y,
+        z: playerPos.current.z,
+        rotY: playerCurrentRotation.current,
+        action: avatarActionRef.current,
+        isMoving: false,
+      },
+      true
+    );
 
     // 10. Wall Collision Checking Helper (실내에서 벽을 뚫고 이동하지 못하게 방지 - 문 통과 원활)
     const checkCollision = (testPos: THREE.Vector3, padding = 0.20): boolean => {
@@ -725,6 +874,10 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
     // Keyboard controls
     const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') {
+        return;
+      }
       const key = e.key.toLowerCase();
       keysPressed.current[key] = true;
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
@@ -789,8 +942,9 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     function tick() {
       const delta = Math.min(clock.getDelta(), 0.1);
 
-      // Update fellow practitioners with terrain elevation so walkers never sink
+      // Update fellow practitioners & real-time connected remote players
       otherPractitioners.update(delta, (x, z) => getSurfaceElevation(x, z, currentTempleId));
+      remotePlayers.update(delta);
 
       // Check click-to-move distance
       const toTarget = new THREE.Vector3().subVectors(playerTargetPos.current, playerPos.current);
@@ -956,6 +1110,17 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       avatar.mesh.position.z = playerPos.current.z;
       avatar.updateAnimation(isMoving, delta);
 
+      // Broadcast real-time player position & action to connected peers (~14Hz + immediate on change)
+      mpClientRef.current?.sendState({
+        templeId: currentTempleId,
+        x: playerPos.current.x,
+        y: playerPos.current.y,
+        z: playerPos.current.z,
+        rotY: playerCurrentRotation.current,
+        action: avatarActionRef.current,
+        isMoving,
+      });
+
       if (waypointMarkerRef.current && waypointMarkerRef.current.visible) {
         const pulse = 1 + Math.sin(clock.getElapsedTime() * 8) * 0.15;
         waypointMarkerRef.current.scale.set(pulse, 1, pulse);
@@ -1040,6 +1205,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
     return () => {
       avatarRef.current = null;
+      remotePlayersRef.current = null;
       cancelAnimationFrame(frameId);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('pointermove', handlePointerMove);
@@ -1049,6 +1215,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', handleResize);
+      envRenderTarget.dispose();
       renderer.dispose();
     };
   }, [currentTempleId]);
@@ -1122,14 +1289,25 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
             淨
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-serif text-stone-400">3D 체험 메타버스</span>
-              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded font-sans flex items-center gap-1">
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-sans flex items-center gap-1">
                 <Users className="w-3 h-3 inline" />
-                <span>도반 6명 실시간 접속 중</span>
+                <span>실시간 도반 {onlineCount}/{maxUsers}명</span>
               </span>
+              <button
+                onClick={() => {
+                  setNicknameDraft(nickname || '수행자');
+                  setShowSettingsModal(true);
+                }}
+                className="text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 px-1.5 py-0.5 rounded font-serif flex items-center gap-1 transition-colors"
+                title="닉네임 변경"
+              >
+                <span>{nickname || '수행자'} (나)</span>
+                <Settings className="w-2.5 h-2.5" />
+              </button>
             </div>
-            <h1 className="text-sm font-serif font-semibold text-white tracking-tight">
+            <h1 className="text-sm font-serif font-semibold text-white tracking-tight mt-0.5">
               {templeTitles[currentTempleId].name}
             </h1>
             <p className="text-[11px] text-amber-400/90 font-serif">
@@ -1160,8 +1338,19 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         </div>
       </div>
 
-      {/* Top Right: Zoom, Global Moktak Off, View Controls, Bell strike, Booking & Help */}
+      {/* Top Right: Zoom, Global Audio Off Controls, Settings, View Controls, Bell strike, Booking & Help */}
       <div className="absolute top-4 right-4 z-20 flex flex-wrap justify-end items-center gap-1.5 sm:gap-2 max-w-[60vw] sm:max-w-none pointer-events-auto">
+        {isDharmaAudioActive && (
+          <button
+            onClick={() => sound.stopDharmaTalk()}
+            className="px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white border border-amber-300/70 rounded-xl text-xs font-serif font-semibold flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
+            title="재생 중인 스님 법문 음성 끄기"
+          >
+            <VolumeX className="w-4 h-4" />
+            <span>법문 끄기</span>
+          </button>
+        )}
+
         {isWalkingAudioActive && (
           <button
             onClick={() => sound.stopAllWalkingAudio()}
@@ -1225,6 +1414,17 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         >
           <Volume2 className="w-4 h-4 text-amber-400" />
           <span className="hidden sm:inline">타종</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setNicknameDraft(nickname || '수행자');
+            setShowSettingsModal(true);
+          }}
+          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
+          title="닉네임 변경 설정"
+        >
+          <Settings className="w-4 h-4 text-amber-300" />
         </button>
 
         <button
@@ -1584,6 +1784,124 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
               className="w-full py-3 bg-stone-900 text-white rounded-lg text-sm font-medium hover:bg-stone-800"
             >
               확인하고 3D 도량 거닐기
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Entrance Nickname Modal */}
+      {!hasJoinedSession && (
+        <div className="fixed inset-0 z-50 bg-stone-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <form
+            onSubmit={handleConfirmEntranceNickname}
+            className="bg-[#FBF9F5] text-stone-900 rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-stone-200 space-y-4"
+          >
+            <div className="text-center space-y-1">
+              <span className="inline-block text-[11px] font-serif text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full">
+                3D 메타버스 도량 입장
+              </span>
+              <h3 className="text-lg font-serif font-bold text-stone-900">
+                수행자 닉네임 입력
+              </h3>
+              <p className="text-xs text-stone-600 font-sans">
+                함께 접속한 도반들에게 표시될 이름입니다. (최대 100명 동시 접속)
+              </p>
+            </div>
+
+            <div>
+              <input
+                type="text"
+                maxLength={12}
+                placeholder="닉네임을 입력하세요 (예: 맑은바람)"
+                value={nicknameDraft}
+                onChange={(e) => setNicknameDraft(e.target.value)}
+                autoFocus
+                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-300 bg-white text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <span className="block mt-1 text-[11px] text-stone-500 font-sans">
+                비워 두면 &apos;수행자&apos;로 입장하며, 우측 상단 톱니바퀴(설정)에서 언제든 변경할 수 있습니다.
+              </span>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-sm font-serif font-semibold transition-colors"
+            >
+              도량으로 입장하기
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Mid-session Settings Modal (Nickname Change) */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-stone-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <form
+            onSubmit={handleSaveSettingsNickname}
+            className="bg-[#FBF9F5] text-stone-900 rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-stone-200 space-y-4"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-stone-200">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-amber-700" />
+                <h4 className="font-serif font-bold text-base">수행자 설정</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSettingsModal(false)}
+                className="p-1 rounded-lg hover:bg-stone-200"
+              >
+                <X className="w-4 h-4 text-stone-600" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-serif font-semibold text-stone-700 mb-1.5">
+                아바타 닉네임 변경
+              </label>
+              <input
+                type="text"
+                maxLength={12}
+                placeholder="새 닉네임 (최대 12자)"
+                value={nicknameDraft}
+                onChange={(e) => setNicknameDraft(e.target.value)}
+                autoFocus
+                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-300 bg-white text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <p className="mt-1.5 text-[11px] text-stone-500">
+                현재 실시간 접속 도반: {onlineCount} / {maxUsers}명
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSettingsModal(false)}
+                className="flex-1 py-2.5 bg-stone-200 hover:bg-stone-300 text-stone-800 rounded-xl text-xs font-medium"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-serif font-semibold"
+              >
+                닉네임 저장
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Room Capacity (100 users) Full Modal */}
+      {roomFullMessage && (
+        <div className="fixed inset-0 z-50 bg-stone-950/80 flex items-center justify-center p-4">
+          <div className="bg-[#FBF9F5] text-stone-900 rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-stone-200 text-center space-y-3">
+            <h4 className="font-serif font-bold text-base text-rose-700">동시 접속 정원 안내</h4>
+            <p className="text-xs text-stone-700 leading-relaxed">{roomFullMessage}</p>
+            <button
+              onClick={() => setRoomFullMessage(null)}
+              className="w-full py-2.5 bg-stone-900 text-white rounded-xl text-xs font-medium"
+            >
+              확인
             </button>
           </div>
         </div>

@@ -50,11 +50,19 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
   const [bowIntervalSec, setBowIntervalSec] = useState(7);
   const [hasCompletedBows, setHasCompletedBows] = useState(false);
 
-  // 3. Dharma Talks state
-  const [selectedTalk, setSelectedTalk] = useState<DharmaTalk>(DHARMA_TALKS[0]);
-  const [isTalkPlaying, setIsTalkPlaying] = useState(false);
-  const [talkTime, setTalkTime] = useState(0);
-  const [talkSpeed, setTalkSpeed] = useState(1);
+  // 3. Dharma Talks state (synced with global SoundEngine TTS)
+  const [selectedTalk, setSelectedTalk] = useState<DharmaTalk>(() => {
+    const active = sound.getDharmaState().activeTalk;
+    if (active) {
+      return DHARMA_TALKS.find((t) => t.id === active.id) || DHARMA_TALKS[0];
+    }
+    return DHARMA_TALKS[0];
+  });
+  const [isTalkPlaying, setIsTalkPlaying] = useState(() => sound.isDharmaPlaying());
+  const [talkTime, setTalkTime] = useState(() => sound.getDharmaState().elapsedSec);
+  const [talkSpeed, setTalkSpeed] = useState(() => sound.getDharmaState().speed);
+  const [activeSentenceIdx, setActiveSentenceIdx] = useState(() => sound.getDharmaState().currentSentenceIdx);
+  const [dharmaSentences, setDharmaSentences] = useState<string[]>(() => sound.getDharmaState().sentences);
   const [showFullTranscript, setShowFullTranscript] = useState(false);
   const [copiedQuote, setCopiedQuote] = useState(false);
 
@@ -149,29 +157,23 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
     return () => clearInterval(bowTimer);
   }, [isAutoBow, hasCompletedBows, bowIntervalSec]);
 
-  // Dharma audio timer
+  // Sync global moktak pacer & global Dharma talk audio state
   useEffect(() => {
-    let talkTimer: NodeJS.Timeout;
-    if (isTalkPlaying) {
-      talkTimer = setInterval(() => {
-        setTalkTime((prev) => {
-          if (prev >= selectedTalk.durationSec) {
-            setIsTalkPlaying(false);
-            return 0;
-          }
-          return prev + 1;
-        });
-      }, 1000 / talkSpeed);
-    }
-    return () => clearInterval(talkTimer);
-  }, [isTalkPlaying, talkSpeed, selectedTalk.durationSec]);
-
-  // Sync global moktak pacer state & pause 108-bow auto loop if modal closes
-  useEffect(() => {
-    const unsubscribe = sound.subscribe(() => {
+    const syncAll = () => {
       setIsWalkingPacing(sound.isMoktakPacing());
-    });
-    return unsubscribe;
+      const ds = sound.getDharmaState();
+      setIsTalkPlaying(ds.isPlaying);
+      setTalkTime(ds.elapsedSec);
+      setTalkSpeed(ds.speed);
+      setActiveSentenceIdx(ds.currentSentenceIdx);
+      setDharmaSentences(ds.sentences);
+      if (ds.activeTalk) {
+        const matched = DHARMA_TALKS.find((t) => t.id === ds.activeTalk?.id);
+        if (matched) setSelectedTalk(matched);
+      }
+    };
+    syncAll();
+    return sound.subscribe(syncAll);
   }, []);
 
   useEffect(() => {
@@ -497,8 +499,7 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
                     key={t.id}
                     onClick={() => {
                       setSelectedTalk(t);
-                      setIsTalkPlaying(false);
-                      setTalkTime(0);
+                      sound.selectDharmaTalk(t);
                     }}
                     className={`px-3 py-2 rounded-lg text-xs font-serif whitespace-nowrap border shrink-0 ${
                       selectedTalk.id === t.id
@@ -512,27 +513,78 @@ export const InWorldProgramModal: React.FC<InWorldProgramModalProps> = ({
               </div>
 
               {/* Player */}
-              <div className="p-4 bg-white border border-stone-200 rounded-xl">
-                <div className="flex justify-between items-baseline mb-2">
+              <div className="p-4 bg-white border border-stone-200 rounded-xl space-y-3">
+                <div className="flex justify-between items-baseline">
                   <h4 className="font-serif font-semibold text-sm text-stone-900">{selectedTalk.title}</h4>
-                  <span className="text-xs font-mono text-stone-500">{formatTime(talkTime)} / {formatTime(selectedTalk.durationSec)}</span>
+                  <span className="text-xs font-mono text-stone-500">
+                    {isTalkPlaying && dharmaSentences.length > 0
+                      ? `${activeSentenceIdx + 1}/${dharmaSentences.length}문장 · `
+                      : ''}
+                    {formatTime(talkTime)}
+                  </span>
                 </div>
 
-                <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden mb-3">
+                <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-stone-900"
-                    style={{ width: `${(talkTime / selectedTalk.durationSec) * 100}%` }}
+                    className="h-full bg-amber-600 transition-all duration-300"
+                    style={{
+                      width: `${
+                        dharmaSentences.length > 0 && (isTalkPlaying || activeSentenceIdx > 0)
+                          ? Math.min(100, Math.round(((activeSentenceIdx + 1) / dharmaSentences.length) * 100))
+                          : Math.min(100, Math.round((talkTime / Math.max(1, selectedTalk.durationSec)) * 100))
+                      }%`,
+                    }}
                   />
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => setIsTalkPlaying(!isTalkPlaying)}
-                    className="px-4 py-2 bg-stone-900 text-white text-xs rounded-lg flex items-center gap-1.5"
-                  >
-                    {isTalkPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                    <span>{isTalkPlaying ? '일시 정지' : '설법 듣기'}</span>
-                  </button>
+                {/* Live spoken subtitle while Dharma talk audio is active */}
+                {isTalkPlaying && dharmaSentences[activeSentenceIdx] && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-lg text-xs font-serif text-amber-950 leading-relaxed flex items-start gap-2">
+                    <Volume2 className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 animate-pulse" />
+                    <span>{dharmaSentences[activeSentenceIdx]}</span>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        if (isTalkPlaying) {
+                          sound.pauseDharmaTalk();
+                        } else {
+                          sound.startDharmaTalk(selectedTalk, talkSpeed);
+                        }
+                      }}
+                      className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white text-xs rounded-lg flex items-center gap-1.5 font-medium"
+                    >
+                      {isTalkPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      <span>{isTalkPlaying ? '일시 정지' : '설법 듣기'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => sound.stopDharmaTalk()}
+                      className="p-2 bg-stone-100 text-stone-700 rounded-lg hover:bg-stone-200"
+                      title="법문 음성 정지 및 처음으로"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+
+                    <div className="flex items-center bg-stone-100 rounded-lg p-0.5 text-[11px] font-mono">
+                      {[0.85, 1, 1.2].map((spd) => (
+                        <button
+                          key={spd}
+                          onClick={() => sound.setDharmaSpeed(spd)}
+                          className={`px-2 py-1 rounded-md transition-colors ${
+                            Math.abs(talkSpeed - spd) < 0.05
+                              ? 'bg-white text-stone-900 font-semibold shadow-2xs'
+                              : 'text-stone-600 hover:text-stone-900'
+                          }`}
+                        >
+                          {spd === 1 ? '1.0x' : `${spd}x`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
                   <button
                     onClick={() => setShowFullTranscript(!showFullTranscript)}

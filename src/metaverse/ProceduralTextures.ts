@@ -231,3 +231,180 @@ export function createLawnGrassTexture(): THREE.CanvasTexture {
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
+
+/**
+ * Procedural Antique Gilt-Bronze Patina Textures (color, roughness, bump)
+ * Produces realistic burnished gold highlights blended with aged dark-bronze patina.
+ */
+export function createAntiqueBronzeTextures(): {
+  map: THREE.CanvasTexture;
+  roughnessMap: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const size = 512;
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = size;
+  colorCanvas.height = size;
+  const cCtx = colorCanvas.getContext('2d')!;
+
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = size;
+  roughCanvas.height = size;
+  const rCtx = roughCanvas.getContext('2d')!;
+
+  const bumpCanvas = document.createElement('canvas');
+  bumpCanvas.width = size;
+  bumpCanvas.height = size;
+  const bCtx = bumpCanvas.getContext('2d')!;
+
+  // Warm burnished gilt-bronze base
+  cCtx.fillStyle = '#c89b44';
+  cCtx.fillRect(0, 0, size, size);
+  rCtx.fillStyle = '#484848'; // ~0.28 roughness base
+  rCtx.fillRect(0, 0, size, size);
+  bCtx.fillStyle = '#808080';
+  bCtx.fillRect(0, 0, size, size);
+
+  // Mottled antique oxidation patina patches
+  for (let i = 0; i < 420; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const rad = 8 + Math.random() * 44;
+    const isDarkPatina = Math.random() > 0.35;
+
+    const grad = cCtx.createRadialGradient(x, y, 0, x, y, rad);
+    if (isDarkPatina) {
+      grad.addColorStop(0, 'rgba(62, 45, 20, 0.24)');
+      grad.addColorStop(1, 'rgba(62, 45, 20, 0)');
+    } else {
+      grad.addColorStop(0, 'rgba(232, 194, 102, 0.18)');
+      grad.addColorStop(1, 'rgba(232, 194, 102, 0)');
+    }
+    cCtx.fillStyle = grad;
+    cCtx.beginPath();
+    cCtx.arc(x, y, rad, 0, Math.PI * 2);
+    cCtx.fill();
+
+    // Roughness higher in oxidized dark spots, lower on burnished areas
+    const rGrad = rCtx.createRadialGradient(x, y, 0, x, y, rad);
+    rGrad.addColorStop(0, isDarkPatina ? 'rgba(130, 130, 130, 0.28)' : 'rgba(32, 32, 32, 0.22)');
+    rGrad.addColorStop(1, 'rgba(72, 72, 72, 0)');
+    rCtx.fillStyle = rGrad;
+    rCtx.beginPath();
+    rCtx.arc(x, y, rad, 0, Math.PI * 2);
+    rCtx.fill();
+  }
+
+  // Fine hand-hammered bronze micro-grain
+  for (let i = 0; i < 2400; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 1 + Math.random() * 2.5;
+    const bright = Math.random() > 0.5;
+    bCtx.fillStyle = bright ? 'rgba(155,155,155,0.12)' : 'rgba(95,95,95,0.12)';
+    bCtx.beginPath();
+    bCtx.arc(x, y, r, 0, Math.PI * 2);
+    bCtx.fill();
+  }
+
+  const map = new THREE.CanvasTexture(colorCanvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
+
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+
+  return { map, roughnessMap, bumpMap };
+}
+
+/**
+ * Procedural Ornate Chased-Gold Brocade Scrollwork (가사 금란 문양 띠)
+ * Creates repeating carved lotus-arabesque relief along robe edges.
+ */
+export function createBrocadeReliefTextures(): {
+  map: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const w = 512;
+  const h = 128;
+
+  const cCanvas = document.createElement('canvas');
+  cCanvas.width = w;
+  cCanvas.height = h;
+  const cCtx = cCanvas.getContext('2d')!;
+
+  const bCanvas = document.createElement('canvas');
+  bCanvas.width = w;
+  bCanvas.height = h;
+  const bCtx = bCanvas.getContext('2d')!;
+
+  // Dark bronze recessed background inside trim border
+  cCtx.fillStyle = '#473316';
+  cCtx.fillRect(0, 0, w, h);
+  bCtx.fillStyle = '#282828';
+  bCtx.fillRect(0, 0, w, h);
+
+  // Raised golden outer border rails
+  cCtx.fillStyle = '#d9ae54';
+  cCtx.fillRect(0, 8, w, 12);
+  cCtx.fillRect(0, h - 20, w, 12);
+
+  bCtx.fillStyle = '#e0e0e0';
+  bCtx.fillRect(0, 8, w, 12);
+  bCtx.fillRect(0, h - 20, w, 12);
+
+  // Embossed floral/scroll arabesque motifs
+  const repeatCount = 8;
+  const step = w / repeatCount;
+  for (let i = 0; i < repeatCount; i++) {
+    const cx = i * step + step * 0.5;
+    const cy = h * 0.5;
+
+    [
+      { ctx: cCtx, stroke: '#e5bc63', fill: '#cca047' },
+      { ctx: bCtx, stroke: '#ebebeb', fill: '#c8c8c8' },
+    ].forEach(({ ctx, stroke, fill }) => {
+      ctx.strokeStyle = stroke;
+      ctx.fillStyle = fill;
+      ctx.lineWidth = 5;
+
+      // Central lotus rosette
+      ctx.beginPath();
+      ctx.arc(cx, cy, 14, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Symmetrical curling vine tendrils
+      ctx.beginPath();
+      ctx.arc(cx - 20, cy - 8, 11, 0, Math.PI * 1.4);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx + 20, cy + 8, 11, Math.PI, Math.PI * 2.4);
+      ctx.stroke();
+    });
+  }
+
+  const map = new THREE.CanvasTexture(cCanvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(4, 1);
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const bumpMap = new THREE.CanvasTexture(bCanvas);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+  bumpMap.repeat.set(4, 1);
+
+  return { map, bumpMap };
+}
+
