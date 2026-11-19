@@ -165,6 +165,16 @@ function clampCoord(val: unknown, fallback = 0): number {
 async function startServer() {
   const app = express();
   app.use(express.json());
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (_req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -183,6 +193,7 @@ async function startServer() {
   function toPublicPlayer(p: PlayerState) {
     return {
       id: p.id,
+      clientKey: p.clientKey,
       nickname: p.nickname,
       templeId: p.templeId,
       x: p.x,

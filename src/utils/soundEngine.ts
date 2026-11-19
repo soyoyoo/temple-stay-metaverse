@@ -196,7 +196,14 @@ class SoundEngine {
     const existing = this.ttsBlobCache.get(cacheKey);
     if (existing) return existing;
 
-    const reqPromise = fetch('/api/dharma-tts', {
+    const rawBase = (
+      (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_BASE_URL || ''
+    )
+      .trim()
+      .replace(/\/+$/, '');
+    const ttsUrl = rawBase ? `${rawBase}/api/dharma-tts` : '/api/dharma-tts';
+
+    const reqPromise = fetch(ttsUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: talk.fullTranscript.trim() }),
@@ -204,7 +211,7 @@ class SoundEngine {
       .then(async (res) => {
         if (!res.ok) {
           this.ttsBlobCache.delete(cacheKey);
-          if (res.status === 429 || res.status === 503) {
+          if (res.status === 404 || res.status === 429 || res.status === 503) {
             const payload = await res.json().catch(() => null) as { retryAfterSec?: number } | null;
             const retrySec =
               payload && typeof payload.retryAfterSec === 'number' && payload.retryAfterSec > 0
