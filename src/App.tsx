@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { MetaverseScene } from './metaverse/MetaverseScene';
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
         currentTempleId={selectedTempleId}
         onSelectTemple={setSelectedTempleId}
       />
+      <Analytics />
     </div>
   );
 }
