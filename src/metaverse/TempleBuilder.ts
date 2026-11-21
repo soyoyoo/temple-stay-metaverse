@@ -84,6 +84,7 @@ export class TempleBuilder {
   public hotspots: InteractiveHotspot[] = [];
   public collisionBoxes: CollisionBox[] = [];
   public mountainMeshes: THREE.Mesh[] = [];
+  public walkableMeshes: THREE.Object3D[] = [];
 
   /**
    * Builds the Expansive Calming Green Lawn Courtyard (4배 넓어진 푸른 잔디 마당)
@@ -100,6 +101,7 @@ export class TempleBuilder {
     lawn.position.set(0, 0.03, 0);
     lawn.receiveShadow = true;
     courtyard.add(lawn);
+    this.walkableMeshes.push(lawn);
 
     // 2. Wide Stepping Stone Paths (폭 2.2m 디딤돌 길)
     const stepMat = new THREE.MeshStandardMaterial({
@@ -226,6 +228,7 @@ export class TempleBuilder {
     plinth.receiveShadow = true;
     plinth.castShadow = true;
     hall.add(plinth);
+    this.walkableMeshes.push(plinth);
 
     // Gentle wide steps leading up (18m wide x 6m deep ramp)
     const stepsGeo = new THREE.BoxGeometry(18, 0.4, 6.0);
@@ -233,6 +236,7 @@ export class TempleBuilder {
     steps.position.set(0, 0.2, 15.0);
     steps.receiveShadow = true;
     hall.add(steps);
+    this.walkableMeshes.push(steps);
 
     // 2. Pillars (12 grand timber pillars)
     const pillarGeo = new THREE.CylinderGeometry(0.55, 0.65, 8.5, 16);
@@ -356,6 +360,7 @@ export class TempleBuilder {
     base.position.y = 0.4;
     base.receiveShadow = true;
     hall.add(base);
+    this.walkableMeshes.push(base);
 
     // Entrance steps facing East toward courtyard (ramp 16m wide in Z)
     const stepsGeo = new THREE.BoxGeometry(5.0, 0.4, 18.0);
@@ -363,6 +368,7 @@ export class TempleBuilder {
     steps.position.set(16.0, 0.2, 0);
     steps.receiveShadow = true;
     hall.add(steps);
+    this.walkableMeshes.push(steps);
 
     // 2. Pillars (keep wide center entrance and symmetric back span unobstructed)
     const pillarGeo = new THREE.CylinderGeometry(0.45, 0.5, 7.5, 16);
@@ -471,6 +477,7 @@ export class TempleBuilder {
     deck.position.y = 0.35;
     deck.receiveShadow = true;
     hall.add(deck);
+    this.walkableMeshes.push(deck);
 
     // Entrance steps facing West toward courtyard (ramp 16m wide in Z)
     const stepsGeo = new THREE.BoxGeometry(5.0, 0.35, 18.0);
@@ -478,6 +485,7 @@ export class TempleBuilder {
     steps.position.set(-16.0, 0.18, 0);
     steps.receiveShadow = true;
     hall.add(steps);
+    this.walkableMeshes.push(steps);
 
     // Pillars (keep wide center entrance and symmetric back span unobstructed)
     const pillarGeo = new THREE.CylinderGeometry(0.45, 0.5, 7.5, 16);
@@ -579,6 +587,7 @@ export class TempleBuilder {
     const base = new THREE.Mesh(baseGeo, this.stoneMat);
     base.position.y = 0.4;
     pavilion.add(base);
+    this.walkableMeshes.push(base);
 
     const pillarGeo = new THREE.CylinderGeometry(0.5, 0.55, 7.5, 16);
     const coords = [
@@ -651,6 +660,7 @@ export class TempleBuilder {
     grass.position.y = 0.036;
     grass.receiveShadow = true;
     courtyard.add(grass);
+    this.walkableMeshes.push(grass);
 
     // 2. Central Natural Wood Tea Table (마음나누기 차담 원목 테이블)
     const tableTopGeo = new THREE.CylinderGeometry(2.4, 2.4, 0.15, 28);
@@ -770,6 +780,7 @@ export class TempleBuilder {
     path.position.set(0, 0.03, -6);
     path.receiveShadow = true;
     trail.add(path);
+    this.walkableMeshes.push(path);
 
     const bambooStalkGeo = new THREE.CylinderGeometry(0.14, 0.18, 9.5, 8);
     const bambooMat = new THREE.MeshStandardMaterial({ color: 0x3d7a42, roughness: 0.5 });

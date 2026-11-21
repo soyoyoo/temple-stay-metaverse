@@ -160,7 +160,73 @@ function sanitizeTempleId(raw: unknown): TempleId {
 
 function clampCoord(val: unknown, fallback = 0): number {
   if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
-  return Math.max(-130, Math.min(130, val));
+  return Math.max(-150, Math.min(150, val));
+}
+
+const REDIS_PLAYERS_HASH_KEY = 'jungto:metaverse:players:v1';
+const REDIS_PLAYER_TTL_MS = 20000;
+
+function getMultiplayerRedisConfig(): { url: string; token: string } | null {
+  const url = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+  const token = (process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  if (!url || !token) return null;
+  return { url, token };
+}
+
+async function redisPipeline(
+  redis: { url: string; token: string },
+  commands: unknown[][]
+): Promise<Array<{ result?: unknown; error?: string }>> {
+  const res = await fetch(`${redis.url}/pipeline`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${redis.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(commands),
+  });
+  if (!res.ok) {
+    throw new Error(`Redis REST error: ${res.status}`);
+  }
+  return (await res.json()) as Array<{ result?: unknown; error?: string }>;
+}
+
+function parseRedisPlayers(raw: unknown): Map<string, HttpPlayerEntry> {
+  const map = new Map<string, HttpPlayerEntry>();
+  if (Array.isArray(raw)) {
+    for (let i = 0; i < raw.length - 1; i += 2) {
+      const k = String(raw[i]);
+      const v = raw[i + 1];
+      if (typeof v === 'string') {
+        try {
+          const parsed = JSON.parse(v) as HttpPlayerEntry;
+          if (parsed && parsed.clientKey) {
+            parsed.joined = true;
+            map.set(k, parsed);
+          }
+        } catch {
+          // ignore malformed entry
+        }
+      }
+    }
+  } else if (raw && typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === 'string') {
+        try {
+          const parsed = JSON.parse(v) as HttpPlayerEntry;
+          if (parsed && parsed.clientKey) {
+            parsed.joined = true;
+            map.set(k, parsed);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+  return map;
 }
 
 async function startServer() {
@@ -183,6 +249,11 @@ async function startServer() {
   const clients = new Map<WebSocket, PlayerState>();
   const wsAlive = new WeakMap<WebSocket, boolean>();
   const httpPlayers = new Map<string, HttpPlayerEntry>();
+  const redisExternalPlayers = new Map<string, HttpPlayerEntry>();
+  const redisDirtyKeys = new Set<string>();
+  const wsLastRedisKeepalive = new Map<string, number>();
+  let lastRedisSyncAt = 0;
+  let redisSyncInFlight: Promise<void> | null = null;
   let nextSeq = 1;
 
   function sendJson(ws: WebSocket, payload: unknown) {
@@ -207,6 +278,39 @@ async function startServer() {
     };
   }
 
+  function hasLocalClientKey(clientKey: string): boolean {
+    for (const wsState of clients.values()) {
+      if (wsState.joined && wsState.clientKey === clientKey) return true;
+    }
+    return httpPlayers.has(clientKey);
+  }
+
+  function pushPlayerToRedis(p: PlayerState) {
+    const redis = getMultiplayerRedisConfig();
+    if (!redis || !p.joined) return;
+    const now = Date.now();
+    wsLastRedisKeepalive.set(p.clientKey, now);
+    redisDirtyKeys.delete(p.clientKey);
+    const payload: HttpPlayerEntry = { ...toPublicPlayer(p), joined: true, lastSeen: now };
+    void redisPipeline(redis, [
+      ['HSET', REDIS_PLAYERS_HASH_KEY, p.clientKey, JSON.stringify(payload)],
+      ['EXPIRE', REDIS_PLAYERS_HASH_KEY, 300],
+    ]).catch(() => {
+      // ignore transient Redis network error
+    });
+  }
+
+  function removePlayerFromRedis(clientKey: string) {
+    redisDirtyKeys.delete(clientKey);
+    wsLastRedisKeepalive.delete(clientKey);
+    if (hasLocalClientKey(clientKey)) return;
+    const redis = getMultiplayerRedisConfig();
+    if (!redis) return;
+    void redisPipeline(redis, [['HDEL', REDIS_PLAYERS_HASH_KEY, clientKey]]).catch(() => {
+      // ignore
+    });
+  }
+
   function getActivePlayers(): PlayerState[] {
     const byId = new Map<string, PlayerState>();
     for (const state of clients.values()) {
@@ -216,11 +320,10 @@ async function startServer() {
     }
     const now = Date.now();
     for (const [key, entry] of httpPlayers.entries()) {
-      if (now - entry.lastSeen > 15000) {
+      if (now - entry.lastSeen > REDIS_PLAYER_TTL_MS) {
         httpPlayers.delete(key);
         continue;
       }
-      // Do not duplicate a player who already has an active WebSocket
       let hasWs = false;
       for (const wsState of clients.values()) {
         if (wsState.joined && wsState.clientKey === entry.clientKey) {
@@ -229,6 +332,15 @@ async function startServer() {
         }
       }
       if (!hasWs) {
+        byId.set(entry.id, entry);
+      }
+    }
+    for (const [key, entry] of redisExternalPlayers.entries()) {
+      if (now - entry.lastSeen > REDIS_PLAYER_TTL_MS) {
+        redisExternalPlayers.delete(key);
+        continue;
+      }
+      if (!hasLocalClientKey(key)) {
         byId.set(entry.id, entry);
       }
     }
@@ -294,6 +406,131 @@ async function startServer() {
       .map(toPublicPlayer);
   }
 
+  async function syncFromRedis(force = false) {
+    const redis = getMultiplayerRedisConfig();
+    if (!redis) return;
+    const now = Date.now();
+    if (!force && now - lastRedisSyncAt < 750) return;
+    if (redisSyncInFlight) {
+      await redisSyncInFlight;
+      return;
+    }
+
+    redisSyncInFlight = (async () => {
+      try {
+        const cmds: unknown[][] = [];
+        for (const wsState of clients.values()) {
+          if (!wsState.joined) continue;
+          const lastPush = wsLastRedisKeepalive.get(wsState.clientKey) ?? 0;
+          if (redisDirtyKeys.has(wsState.clientKey) || now - lastPush > 6000) {
+            redisDirtyKeys.delete(wsState.clientKey);
+            wsLastRedisKeepalive.set(wsState.clientKey, now);
+            const payload: HttpPlayerEntry = { ...toPublicPlayer(wsState), joined: true, lastSeen: now };
+            cmds.push(['HSET', REDIS_PLAYERS_HASH_KEY, wsState.clientKey, JSON.stringify(payload)]);
+          }
+        }
+        if (cmds.length > 0) {
+          cmds.push(['EXPIRE', REDIS_PLAYERS_HASH_KEY, 300]);
+        }
+        cmds.push(['HGETALL', REDIS_PLAYERS_HASH_KEY]);
+
+        const results = await redisPipeline(redis, cmds);
+        lastRedisSyncAt = Date.now();
+        const hgetRes = results[results.length - 1];
+        const freshAll = parseRedisPlayers(hgetRes?.result);
+
+        const expiredKeys: string[] = [];
+        const nextExternal = new Map<string, HttpPlayerEntry>();
+        const evalNow = Date.now();
+
+        for (const [key, entry] of freshAll.entries()) {
+          if (!entry.lastSeen || evalNow - entry.lastSeen > REDIS_PLAYER_TTL_MS) {
+            expiredKeys.push(key);
+            continue;
+          }
+          if (!hasLocalClientKey(key)) {
+            nextExternal.set(key, entry);
+          }
+        }
+
+        if (expiredKeys.length > 0) {
+          void redisPipeline(redis, [['HDEL', REDIS_PLAYERS_HASH_KEY, ...expiredKeys]]).catch(() => {});
+        }
+
+        let presenceChanged = false;
+
+        // Detect removed external players
+        for (const [key, prev] of redisExternalPlayers.entries()) {
+          if (!nextExternal.has(key)) {
+            redisExternalPlayers.delete(key);
+            broadcastToTemple(prev.templeId, { type: 'player:left', id: prev.id });
+            presenceChanged = true;
+          }
+        }
+
+        // Detect added or updated external players
+        for (const [key, entry] of nextExternal.entries()) {
+          const prev = redisExternalPlayers.get(key);
+          redisExternalPlayers.set(key, entry);
+
+          if (!prev) {
+            broadcastToTemple(entry.templeId, { type: 'player:joined', player: toPublicPlayer(entry) });
+            presenceChanged = true;
+          } else if (prev.templeId !== entry.templeId) {
+            broadcastToTemple(prev.templeId, { type: 'player:left', id: prev.id });
+            broadcastToTemple(entry.templeId, { type: 'player:joined', player: toPublicPlayer(entry) });
+            presenceChanged = true;
+          } else {
+            if (prev.nickname !== entry.nickname) {
+              broadcastToTemple(entry.templeId, {
+                type: 'player:renamed',
+                id: entry.id,
+                nickname: entry.nickname,
+              });
+              presenceChanged = true;
+            }
+            if (
+              prev.x !== entry.x ||
+              prev.y !== entry.y ||
+              prev.z !== entry.z ||
+              prev.rotY !== entry.rotY ||
+              prev.action !== entry.action ||
+              prev.isMoving !== entry.isMoving
+            ) {
+              broadcastToTemple(entry.templeId, {
+                type: 'player:updated',
+                id: entry.id,
+                x: entry.x,
+                y: entry.y,
+                z: entry.z,
+                rotY: entry.rotY,
+                action: entry.action,
+                isMoving: entry.isMoving,
+              });
+            }
+          }
+        }
+
+        if (presenceChanged) {
+          broadcastPresenceCount();
+        }
+      } catch {
+        // ignore transient Redis network errors
+      } finally {
+        redisSyncInFlight = null;
+      }
+    })();
+
+    await redisSyncInFlight;
+  }
+
+  // Background cross-instance Redis sync for AI Studio Preview <-> Shared App URL <-> Vercel
+  const redisSyncInterval = setInterval(() => {
+    if (!getMultiplayerRedisConfig()) return;
+    if (clients.size === 0 && redisExternalPlayers.size === 0) return;
+    void syncFromRedis(false);
+  }, 900);
+
   // Heartbeat keepalive (prevents Cloud Run / reverse proxies from silently dropping idle WS)
   const heartbeatInterval = setInterval(() => {
     const now = Date.now();
@@ -304,6 +541,7 @@ async function startServer() {
         clients.delete(ws);
         if (state.joined) {
           broadcastToTemple(state.templeId, { type: 'player:left', id: state.id });
+          removePlayerFromRedis(state.clientKey);
           changed = true;
         }
         try {
@@ -322,9 +560,10 @@ async function startServer() {
     }
 
     for (const [key, entry] of httpPlayers.entries()) {
-      if (now - entry.lastSeen > 15000) {
+      if (now - entry.lastSeen > REDIS_PLAYER_TTL_MS) {
         httpPlayers.delete(key);
         broadcastToTemple(entry.templeId, { type: 'player:left', id: entry.id });
+        removePlayerFromRedis(key);
         changed = true;
       }
     }
@@ -336,6 +575,7 @@ async function startServer() {
 
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
+    clearInterval(redisSyncInterval);
   });
 
   wss.on('connection', (ws: WebSocket) => {
@@ -388,6 +628,12 @@ async function startServer() {
       if (!current) return;
 
       if (msg.type === 'ping') {
+        if (current.joined) {
+          const lastPush = wsLastRedisKeepalive.get(current.clientKey) ?? 0;
+          if (Date.now() - lastPush > 5000) {
+            pushPlayerToRedis(current);
+          }
+        }
         sendJson(ws, { type: 'pong' });
         return;
       }
@@ -406,12 +652,19 @@ async function startServer() {
         current.isMoving = Boolean(msg.isMoving);
         current.joined = true;
 
-        // Remove any HTTP fallback record for this same client tab
+        // Remove any HTTP fallback / external cache record for this same client tab
         const existingHttp = httpPlayers.get(current.clientKey);
         if (existingHttp) {
           httpPlayers.delete(current.clientKey);
           if (existingHttp.id !== current.id) {
             broadcastToTemple(existingHttp.templeId, { type: 'player:left', id: existingHttp.id }, ws);
+          }
+        }
+        const existingExternal = redisExternalPlayers.get(current.clientKey);
+        if (existingExternal) {
+          redisExternalPlayers.delete(current.clientKey);
+          if (existingExternal.id !== current.id) {
+            broadcastToTemple(existingExternal.templeId, { type: 'player:left', id: existingExternal.id }, ws);
           }
         }
 
@@ -432,32 +685,41 @@ async function startServer() {
           broadcastToTemple(prevTemple, { type: 'player:left', id: current.id }, ws);
         }
 
-        const active = getActivePlayers();
-        sendJson(ws, {
-          type: 'init',
-          selfId: current.id,
-          maxUsers: MAX_CONCURRENT_USERS,
-          totalOnline: active.length,
-          players: getPlayersInTemple(current.templeId, current.id),
-          allPlayersSummary: getAllPlayersSummary(),
+        pushPlayerToRedis(current);
+        void syncFromRedis(true).then(() => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const active = getActivePlayers();
+          sendJson(ws, {
+            type: 'init',
+            selfId: current.id,
+            maxUsers: MAX_CONCURRENT_USERS,
+            totalOnline: active.length,
+            players: getPlayersInTemple(current.templeId, current.id),
+            allPlayersSummary: getAllPlayersSummary(),
+          });
+          broadcastPresenceCount();
         });
 
         broadcastToTemple(current.templeId, { type: 'player:joined', player: toPublicPlayer(current) }, ws);
         broadcastPresenceCount();
       } else if (msg.type === 'sync:request') {
         if (!current.joined) return;
-        sendJson(ws, {
-          type: 'room:sync',
-          selfId: current.id,
-          templeId: current.templeId,
-          players: getPlayersInTemple(current.templeId, current.id),
-          allPlayersSummary: getAllPlayersSummary(),
+        void syncFromRedis(false).then(() => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          sendJson(ws, {
+            type: 'room:sync',
+            selfId: current.id,
+            templeId: current.templeId,
+            players: getPlayersInTemple(current.templeId, current.id),
+            allPlayersSummary: getAllPlayersSummary(),
+          });
         });
       } else if (msg.type === 'state') {
         if (!current.joined) return;
         const nextTemple = sanitizeTempleId(msg.templeId ?? current.templeId);
         const templeChanged = nextTemple !== current.templeId;
         const oldTemple = current.templeId;
+        const oldAction = current.action;
 
         current.templeId = nextTemple;
         current.x = clampCoord(msg.x, current.x);
@@ -466,6 +728,13 @@ async function startServer() {
         current.rotY = typeof msg.rotY === 'number' && Number.isFinite(msg.rotY) ? msg.rotY : current.rotY;
         current.action = typeof msg.action === 'string' ? msg.action.slice(0, 20) : current.action;
         current.isMoving = Boolean(msg.isMoving);
+
+        const lastRedisPush = wsLastRedisKeepalive.get(current.clientKey) ?? 0;
+        if (templeChanged || oldAction !== current.action || Date.now() - lastRedisPush >= 350) {
+          pushPlayerToRedis(current);
+        } else {
+          redisDirtyKeys.add(current.clientKey);
+        }
 
         if (templeChanged) {
           broadcastToTemple(oldTemple, { type: 'player:left', id: current.id }, ws);
@@ -497,6 +766,7 @@ async function startServer() {
       } else if (msg.type === 'nickname') {
         current.nickname = sanitizeNickname(msg.nickname);
         if (current.joined) {
+          pushPlayerToRedis(current);
           broadcastToTemple(
             current.templeId,
             {
@@ -516,6 +786,7 @@ async function startServer() {
       clients.delete(ws);
       if (left && left.joined) {
         broadcastToTemple(left.templeId, { type: 'player:left', id: left.id });
+        removePlayerFromRedis(left.clientKey);
         broadcastPresenceCount();
       }
     });
@@ -525,19 +796,22 @@ async function startServer() {
       clients.delete(ws);
       if (left && left.joined) {
         broadcastToTemple(left.templeId, { type: 'player:left', id: left.id });
+        removePlayerFromRedis(left.clientKey);
         broadcastPresenceCount();
       }
     });
   });
 
-  // HTTP fallback sync endpoint (ensures 2+ users see each other even if a proxy blocks WebSocket)
-  app.post('/api/multiplayer/sync', (req, res) => {
+  // HTTP fallback sync endpoint (merges WS, HTTP & Upstash Redis cross-instance players)
+  app.post('/api/multiplayer/sync', async (req, res) => {
     const body = req.body ?? {};
     const clientKey = sanitizeClientKey(body.clientKey, '');
     if (!clientKey) {
       res.status(400).json({ error: 'CLIENT_KEY_REQUIRED' });
       return;
     }
+
+    await syncFromRedis(false);
 
     // Check if this client already has a joined WebSocket
     let wsMatched: PlayerState | undefined;
@@ -591,6 +865,8 @@ async function startServer() {
       lastSeen: Date.now(),
     };
     httpPlayers.set(clientKey, entry);
+    redisExternalPlayers.delete(clientKey);
+    pushPlayerToRedis(entry);
 
     if (!existing) {
       broadcastToTemple(entry.templeId, { type: 'player:joined', player: toPublicPlayer(entry) });
@@ -631,7 +907,8 @@ async function startServer() {
     });
   });
 
-  app.get('/api/presence', (_req, res) => {
+  app.get('/api/presence', async (_req, res) => {
+    await syncFromRedis(false);
     res.json({
       onlineCount: getActivePlayers().length,
       maxUsers: MAX_CONCURRENT_USERS,

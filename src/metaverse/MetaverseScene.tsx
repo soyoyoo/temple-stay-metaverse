@@ -124,6 +124,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const collisionBoxesRef = useRef<CollisionBox[]>([]);
   const groundMeshRef = useRef<THREE.Mesh | null>(null);
   const mountainMeshesRef = useRef<THREE.Mesh[]>([]);
+  const walkableMeshesRef = useRef<THREE.Object3D[]>([]);
   const waypointMarkerRef = useRef<THREE.Group | null>(null);
 
   const waypointQueueRef = useRef<THREE.Vector3[]>([]);
@@ -687,7 +688,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       antialias: !isSoftwareGl,
       powerPreference: 'high-performance',
     });
-    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setSize(container.clientWidth, container.clientHeight, false);
     renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -695,6 +696,9 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
+    renderer.domElement.style.display = 'block';
     renderer.domElement.style.touchAction = 'none';
     container.replaceChildren(renderer.domElement);
 
@@ -859,6 +863,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     hotspotsRef.current = builder.hotspots;
     collisionBoxesRef.current = builder.collisionBoxes;
     mountainMeshesRef.current = builder.mountainMeshes;
+    walkableMeshesRef.current = builder.walkableMeshes;
     playerPos.current.y = getSurfaceElevation(playerPos.current.x, playerPos.current.z, currentTempleId);
 
     // 8. Ambient Practitioners & Live Connected Remote Players (최대 100명 동시 접속 도반)
@@ -1027,12 +1032,21 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       const endDist = Math.hypot(e.clientX - ptr.startX, e.clientY - ptr.startY);
       // Only a pure click/tap (< 8px total drag) moves the avatar! Drag-and-drop only turns direction.
       if (endDist < 8 && maxDragDist < 8 && container && groundMeshRef.current) {
-        const rect = container.getBoundingClientRect();
-        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
 
+        const pointerX = ptr.pointerType === 'touch' ? ptr.startX : e.clientX;
+        const pointerY = ptr.pointerType === 'touch' ? ptr.startY : e.clientY;
+        mouse.x = ((pointerX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((pointerY - rect.top) / rect.height) * 2 + 1;
+
+        camera.updateMatrixWorld();
         raycaster.setFromCamera(mouse, camera);
-        const raycastTargets: THREE.Object3D[] = [groundMeshRef.current, ...mountainMeshesRef.current];
+        const raycastTargets: THREE.Object3D[] = [
+          groundMeshRef.current,
+          ...walkableMeshesRef.current,
+          ...mountainMeshesRef.current,
+        ];
         const intersects = raycaster.intersectObjects(raycastTargets, false);
 
         if (intersects.length > 0) {
@@ -1129,15 +1143,21 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 
-    // Resize
+    // Resize (keeps canvas buffer, CSS rect, and projection matrix 1:1 across mobile browser chrome shifts)
     const handleResize = () => {
       if (!container || !renderer || !camera) return;
-      camera.aspect = container.clientWidth / container.clientHeight;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      camera.aspect = width / height;
       camera.updateProjectionMatrix();
-      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setSize(width, height, false);
     };
 
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
     window.addEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('resize', handleResize);
 
     // 12. Animation Tick Loop
     const clock = new THREE.Clock();
@@ -1439,6 +1459,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       avatarRef.current = null;
       remotePlayersRef.current = null;
       mountainMeshesRef.current = [];
+      walkableMeshesRef.current = [];
       cancelAnimationFrame(frameId);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('pointermove', handlePointerMove);
@@ -1447,7 +1468,9 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       canvas.removeEventListener('wheel', handleWheel);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      resizeObserver.disconnect();
       window.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('resize', handleResize);
       envRenderTarget.dispose();
       buddhaEnvTarget.dispose();
       renderer.dispose();
@@ -1510,6 +1533,105 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     }
   }, [activeModal]);
 
+  const toolbarButtons = (
+    <>
+      {isDharmaAudioActive && (
+        <button
+          onClick={() => sound.stopDharmaTalk()}
+          className="px-2.5 py-1.5 sm:px-3 sm:py-2 bg-amber-600 hover:bg-amber-500 text-white border border-amber-300/70 rounded-xl text-xs font-serif font-semibold flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
+          title="재생 중인 스님 법문 음성 끄기"
+        >
+          <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <span>법문 끄기</span>
+        </button>
+      )}
+
+      {isWalkingAudioActive && (
+        <button
+          onClick={() => sound.stopAllWalkingAudio()}
+          className="px-2.5 py-1.5 sm:px-3 sm:py-2 bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/70 rounded-xl text-xs font-serif font-semibold flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
+          title="포행 목탁 및 자연 소리 끄기"
+        >
+          <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <span>목탁 끄기</span>
+        </button>
+      )}
+
+      {/* Gradual Zoom In / Out (50% ~ 200%) for Smartphone & PC */}
+      <div className="flex items-center bg-stone-950/85 border border-stone-700/70 rounded-xl overflow-hidden shadow-md">
+        <button
+          onClick={() => adjustZoom(-0.15)}
+          disabled={zoomPercent <= 50}
+          className="p-1.5 sm:p-2 text-stone-200 hover:bg-stone-800 disabled:opacity-40 transition-colors"
+          title="화면 축소 (최소 50%)"
+        >
+          <ZoomOut className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+        </button>
+        <button
+          onClick={() => adjustZoom(0, true)}
+          className="px-1.5 sm:px-2 py-1 sm:py-1.5 text-[11px] font-mono text-amber-300 hover:bg-stone-800 border-x border-stone-800 min-w-[42px] sm:min-w-[46px] text-center"
+          title="기본 배율(100%)로 복원"
+        >
+          {zoomPercent}%
+        </button>
+        <button
+          onClick={() => adjustZoom(0.15)}
+          disabled={zoomPercent >= 200}
+          className="p-1.5 sm:p-2 text-stone-200 hover:bg-stone-800 disabled:opacity-40 transition-colors"
+          title="화면 확대 (최대 200%)"
+        >
+          <ZoomIn className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+        </button>
+      </div>
+
+      <button
+        onClick={() => setActiveModal('booking')}
+        className="px-2.5 py-1.5 sm:px-3.5 sm:py-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-serif font-semibold rounded-xl text-xs flex items-center gap-1 sm:gap-1.5 shadow-lg transition-transform active:scale-95"
+      >
+        <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-stone-900" />
+        <span className="hidden sm:inline">템플스테이 신청</span>
+        <span className="sm:hidden">예약</span>
+      </button>
+
+      <button
+        onClick={() => setCameraMode(cameraMode === 'third' ? 'first' : 'third')}
+        className="p-1.5 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1 font-sans"
+        title="시점 변경"
+      >
+        <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-stone-400" />
+        <span className="hidden sm:inline">{cameraMode === 'third' ? '3인칭' : '1인칭'}</span>
+      </button>
+
+      <button
+        onClick={() => sound.playTempleGong()}
+        className="p-1.5 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
+        title="범종 타종"
+      >
+        <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
+        <span className="hidden sm:inline">타종</span>
+      </button>
+
+      <button
+        onClick={() => {
+          setNicknameDraft(nickname || '수행자');
+          setShowSettingsModal(true);
+        }}
+        className="p-1.5 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
+        title="닉네임 변경 설정"
+      >
+        <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-300" />
+      </button>
+
+      <button
+        onClick={() => setShowHelpModal(true)}
+        className="p-1.5 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
+        title="조작 안내"
+      >
+        <HelpCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-stone-400" />
+      </button>
+    </>
+  );
+
   return (
     <div className="relative w-screen h-dvh bg-stone-950 overflow-hidden select-none">
       
@@ -1517,8 +1639,8 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       <div ref={mountRef} className="w-full h-full cursor-crosshair touch-none" />
 
       {/* Top Left: 3D Sanctuary HUD Status & Sanctuary Switcher */}
-      <div className="absolute top-4 left-4 z-20 pointer-events-auto">
-        <div className="bg-stone-950/85 backdrop-blur-md border border-stone-700/80 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3">
+      <div className="absolute top-3 left-3 right-3 sm:right-auto sm:top-4 sm:left-4 z-20 pointer-events-none flex flex-col items-start">
+        <div className="pointer-events-auto w-full sm:w-auto bg-stone-950/85 backdrop-blur-md border border-stone-700/80 text-white px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl shadow-2xl flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center font-serif text-xs font-semibold">
             淨
           </div>
@@ -1557,7 +1679,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
         {/* Interactive Connected Practitioners Roster (동시 접속 도반 위치 확인 & 찾아가기) */}
         {showOnlineRoster && (
-          <div className="mt-2 bg-stone-950/92 backdrop-blur-md border border-stone-700/80 rounded-xl p-2.5 shadow-2xl text-white max-w-xs max-h-60 overflow-y-auto space-y-1.5">
+          <div className="pointer-events-auto mt-2 bg-stone-950/92 backdrop-blur-md border border-stone-700/80 rounded-xl p-2.5 shadow-2xl text-white w-full sm:max-w-xs max-h-60 overflow-y-auto space-y-1.5">
             <div className="flex items-center justify-between text-[11px] text-emerald-300 font-serif pb-1 border-b border-stone-800">
               <span>함께 수행 중인 도반 ({onlineCount}명)</span>
               <button
@@ -1622,8 +1744,8 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
           </div>
         )}
 
-        {/* 3 Sanctuary Switcher Pills */}
-        <div className="mt-2 flex gap-1.5 bg-stone-950/80 p-1 rounded-xl border border-stone-800">
+        {/* 3 Sanctuary Switcher Pills (절 이동 바메뉴) */}
+        <div className="pointer-events-auto mt-2 flex gap-1.5 bg-stone-950/80 p-1 rounded-xl border border-stone-800 w-full sm:w-auto justify-between sm:justify-start">
           {[
             { id: 'mungyeong' as const, label: '깊은 산속 수련원' },
             { id: 'seocho' as const, label: '도심속 회관' },
@@ -1632,7 +1754,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
             <button
               key={s.id}
               onClick={() => onSelectTemple(s.id)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-serif transition-colors ${
+              className={`flex-1 sm:flex-none px-2.5 py-1 rounded-lg text-xs font-serif transition-colors ${
                 currentTempleId === s.id
                   ? 'bg-amber-500 text-stone-950 font-semibold'
                   : 'text-stone-300 hover:text-white hover:bg-stone-800'
@@ -1642,109 +1764,21 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
             </button>
           ))}
         </div>
+
+        {/* Mobile Action Toolbar: Placed cleanly below Sanctuary Switcher on the right */}
+        <div className="sm:hidden pointer-events-auto w-full mt-2 flex flex-wrap justify-end items-center gap-1.5">
+          {toolbarButtons}
+        </div>
       </div>
 
-      {/* Top Right: Zoom, Global Audio Off Controls, Settings, View Controls, Bell strike, Booking & Help */}
-      <div className="absolute top-4 right-4 z-20 flex flex-wrap justify-end items-center gap-1.5 sm:gap-2 max-w-[60vw] sm:max-w-none pointer-events-auto">
-        {isDharmaAudioActive && (
-          <button
-            onClick={() => sound.stopDharmaTalk()}
-            className="px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white border border-amber-300/70 rounded-xl text-xs font-serif font-semibold flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
-            title="재생 중인 스님 법문 음성 끄기"
-          >
-            <VolumeX className="w-4 h-4" />
-            <span>법문 끄기</span>
-          </button>
-        )}
-
-        {isWalkingAudioActive && (
-          <button
-            onClick={() => sound.stopAllWalkingAudio()}
-            className="px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white border border-rose-400/70 rounded-xl text-xs font-serif font-semibold flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
-            title="포행 목탁 및 자연 소리 끄기"
-          >
-            <VolumeX className="w-4 h-4" />
-            <span>목탁 끄기</span>
-          </button>
-        )}
-
-        {/* Gradual Zoom In / Out (50% ~ 200%) for Smartphone & PC */}
-        <div className="flex items-center bg-stone-950/85 border border-stone-700/70 rounded-xl overflow-hidden shadow-md">
-          <button
-            onClick={() => adjustZoom(-0.15)}
-            disabled={zoomPercent <= 50}
-            className="p-2 text-stone-200 hover:bg-stone-800 disabled:opacity-40 transition-colors"
-            title="화면 축소 (최소 50%)"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => adjustZoom(0, true)}
-            className="px-2 py-1.5 text-[11px] font-mono text-amber-300 hover:bg-stone-800 border-x border-stone-800 min-w-[46px] text-center"
-            title="기본 배율(100%)로 복원"
-          >
-            {zoomPercent}%
-          </button>
-          <button
-            onClick={() => adjustZoom(0.15)}
-            disabled={zoomPercent >= 200}
-            className="p-2 text-stone-200 hover:bg-stone-800 disabled:opacity-40 transition-colors"
-            title="화면 확대 (최대 200%)"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-        </div>
-
-        <button
-          onClick={() => setActiveModal('booking')}
-          className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-serif font-semibold rounded-xl text-xs flex items-center gap-1.5 shadow-lg transition-transform active:scale-95"
-        >
-          <Calendar className="w-4 h-4 text-stone-900" />
-          <span className="hidden sm:inline">템플스테이 신청</span>
-          <span className="sm:hidden">예약</span>
-        </button>
-
-        <button
-          onClick={() => setCameraMode(cameraMode === 'third' ? 'first' : 'third')}
-          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1 font-sans"
-          title="시점 변경"
-        >
-          <Eye className="w-4 h-4 text-stone-400" />
-          <span className="hidden sm:inline">{cameraMode === 'third' ? '3인칭' : '1인칭'}</span>
-        </button>
-
-        <button
-          onClick={() => sound.playTempleGong()}
-          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
-          title="범종 타종"
-        >
-          <Volume2 className="w-4 h-4 text-amber-400" />
-          <span className="hidden sm:inline">타종</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setNicknameDraft(nickname || '수행자');
-            setShowSettingsModal(true);
-          }}
-          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
-          title="닉네임 변경 설정"
-        >
-          <Settings className="w-4 h-4 text-amber-300" />
-        </button>
-
-        <button
-          onClick={() => setShowHelpModal(true)}
-          className="p-2 sm:p-2.5 bg-stone-950/80 hover:bg-stone-900 border border-stone-700/70 text-stone-200 rounded-xl text-xs flex items-center gap-1"
-          title="조작 안내"
-        >
-          <HelpCircle className="w-4 h-4 text-stone-400" />
-        </button>
+      {/* Desktop Top Right: Zoom, Global Audio Off Controls, Settings, View Controls, Bell strike, Booking & Help */}
+      <div className="hidden sm:flex absolute top-4 right-4 z-20 flex-wrap justify-end items-center gap-2 pointer-events-auto">
+        {toolbarButtons}
       </div>
 
       {/* Proximity Interaction Prompt Banner */}
       {activeNearbyHotspot && (
-        <div className="absolute top-32 sm:top-24 left-1/2 -translate-x-1/2 z-30 pointer-events-auto animate-bounce">
+        <div className="absolute top-48 sm:top-24 left-1/2 -translate-x-1/2 z-30 pointer-events-auto animate-bounce">
           <button
             onClick={() => {
               if (activeNearbyHotspot.id === 'bell') {
@@ -1766,7 +1800,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
       {/* Yeonhwajeong Chair Sit / Stand Button (연화정 마당 의자 앉기 / 일어나기) */}
       {(isNearYeonhwajeongChairs || isSittingOnChair) && (
-        <div className="absolute top-44 sm:top-38 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
+        <div className="absolute top-60 sm:top-38 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
           <button
             onClick={toggleSitOnChair}
             className={`px-5 py-2.5 rounded-full shadow-2xl flex items-center gap-2 font-serif font-semibold text-xs sm:text-sm border-2 transition-all active:scale-95 ${
@@ -1786,7 +1820,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
       {/* Mouse Click-to-Move Guidance Toast */}
       {clickMoveFeedback && (
-        <div className="absolute top-50 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+        <div className="absolute top-64 sm:top-50 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
           <div className="bg-stone-900/90 text-amber-300 border border-amber-500/40 px-4 py-1.5 rounded-full text-xs font-serif shadow-lg animate-fade-in flex items-center gap-1.5">
             <MousePointerClick className="w-3.5 h-3.5" />
             <span>{clickMoveFeedback}</span>

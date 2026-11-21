@@ -58,7 +58,7 @@ function sanitizeTempleId(raw: unknown): TempleId {
 
 function clampCoord(val: unknown, fallback = 0): number {
   if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
-  return Math.max(-130, Math.min(130, val));
+  return Math.max(-150, Math.min(150, val));
 }
 
 function hashColorIndex(clientKey: string): number {
