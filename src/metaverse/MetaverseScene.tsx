@@ -2062,30 +2062,16 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
             <div className="py-4 space-y-3 text-xs sm:text-sm text-stone-700 font-sans">
               <div className="flex justify-between items-center p-2.5 bg-stone-100 rounded-lg">
-                <span className="font-medium">마우스 클릭 이동 (잔디밭 & 길)</span>
+                <span className="font-medium">마우스 클릭 이동</span>
                 <span className="font-mono bg-white px-2 py-1 rounded border border-stone-300 font-semibold text-amber-800">
                   바닥 클릭 / 터치
                 </span>
               </div>
 
               <div className="flex justify-between items-center p-2.5 bg-stone-100 rounded-lg">
-                <span className="font-medium">실내 벽 충돌 방지</span>
-                <span className="text-emerald-700 font-medium">
-                  벽을 통과할 수 없으며 정문으로 입장
-                </span>
-              </div>
-
-              <div className="flex justify-between items-center p-2.5 bg-stone-100 rounded-lg">
-                <span className="font-medium">연화정 의자 앉기 / 일어나기</span>
+                <span className="font-medium">의자 앉기 / 일어나기</span>
                 <span className="font-mono bg-white px-2 py-1 rounded border border-stone-300 font-semibold text-emerald-800">
                   [F] 키 또는 의자 클릭
-                </span>
-              </div>
-
-              <div className="flex justify-between items-center p-2.5 bg-stone-100 rounded-lg">
-                <span className="font-medium">마루 위 & 언덕 위 보행</span>
-                <span className="text-amber-800 font-medium">
-                  대웅전·선방 마루 및 언덕 위로 자연스럽게 이동
                 </span>
               </div>
 
