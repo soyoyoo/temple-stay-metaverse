@@ -70,8 +70,9 @@ export class OtherPractitionersManager {
         id: 'p4',
         name: '도반 해탈',
         robeColor: 0x7a7d80, // Classic monk grey
-        initialPos: new THREE.Vector3(65, 0, -32),
-        targetPos: new THREE.Vector3(65, 0, -52),
+        // Centered on the flat bamboo forest stone path (x=54, y=0.06, z=-23..-36), clear of 108 Bows Hall & mountains
+        initialPos: new THREE.Vector3(54, 0.06, -23),
+        targetPos: new THREE.Vector3(54, 0.06, -36),
         action: 'walking',
         statusMessage: '울창한 대나무 숲길 묵언 포행',
       },
@@ -256,13 +257,13 @@ export class OtherPractitionersManager {
       p.actionTimer += delta;
 
       if (p.data.action === 'walking') {
-        p.walkTimer += delta * 0.45;
+        p.walkTimer += delta * 0.225; // 50% slower serene walking pace
         const progress = (Math.sin(p.walkTimer) + 1) / 2;
         const currentPos = new THREE.Vector3().lerpVectors(p.data.initialPos, p.data.targetPos, progress);
         const groundY = getElevation ? getElevation(currentPos.x, currentPos.z) : p.data.initialPos.y;
         p.avatarGroup.position.set(
           currentPos.x,
-          groundY + Math.abs(Math.sin(p.actionTimer * 18)) * 0.05,
+          groundY + Math.abs(Math.sin(p.actionTimer * 9)) * 0.035,
           currentPos.z
         );
 
@@ -270,13 +271,13 @@ export class OtherPractitionersManager {
         if (Math.cos(p.walkTimer) < 0) dir.negate();
         p.avatarGroup.rotation.y = Math.atan2(dir.x, dir.z);
 
-        const legSwing = Math.sin(p.actionTimer * 9) * 0.45;
+        const legSwing = Math.sin(p.actionTimer * 4.5) * 0.4;
         p.leftLeg.rotation.x = legSwing;
         p.rightLeg.rotation.x = -legSwing;
         p.leftArm.rotation.x = -legSwing * 0.6;
         p.rightArm.rotation.x = legSwing * 0.6;
         p.innerRig.position.y = 0;
-        p.avatarGroup.rotation.z = Math.sin(p.actionTimer * 9) * 0.05;
+        p.avatarGroup.rotation.z = Math.sin(p.actionTimer * 4.5) * 0.04;
       } else if (p.data.action === 'bowing') {
         // Stay cleanly on top of the 108 bows floor/mat (initialPos.y = 0.78)
         p.avatarGroup.position.y = p.data.initialPos.y;

@@ -34,6 +34,10 @@ interface MetaverseSceneProps {
   onSelectTemple: (id: 'seocho' | 'mungyeong' | 'jukrim') => void;
 }
 
+const _elevRaycaster = new THREE.Raycaster();
+const _elevOrigin = new THREE.Vector3();
+const _elevDown = new THREE.Vector3(0, -1, 0);
+
 export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   currentTempleId,
   onSelectTemple,
@@ -119,6 +123,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
   const hotspotsRef = useRef<InteractiveHotspot[]>([]);
   const collisionBoxesRef = useRef<CollisionBox[]>([]);
   const groundMeshRef = useRef<THREE.Mesh | null>(null);
+  const mountainMeshesRef = useRef<THREE.Mesh[]>([]);
   const waypointMarkerRef = useRef<THREE.Group | null>(null);
 
   const waypointQueueRef = useRef<THREE.Vector3[]>([]);
@@ -319,10 +324,24 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
       hallElev = Math.max(hallElev, 0.80);
     }
 
-    // 5. Mountain slopes & hills (산속으로 파묻히지 않고 산을 올라가게)
-    const mountainElev = calculateMountainHeight(x, z, templeId);
+    // 4b. Bamboo Trail Stone Path (x: [51.75, 56.25], z: [-66, -22], top y = 0.06)
+    if (x >= 51.75 && x <= 56.25 && z >= -66 && z <= -22) {
+      hallElev = Math.max(hallElev, 0.06);
+    }
 
-    return Math.max(hallElev, mountainElev);
+    // 5. Mountain slopes, hills & peaks (산속으로 파묻히지 않고 산 능선과 봉우리 위로 걷게)
+    const mountainElev = calculateMountainHeight(x, z, templeId);
+    let peakElev = 0.0;
+    if (templeId === 'mungyeong' && mountainMeshesRef.current.length > 0) {
+      _elevOrigin.set(x, 200, z);
+      _elevRaycaster.set(_elevOrigin, _elevDown);
+      const hits = _elevRaycaster.intersectObjects(mountainMeshesRef.current, false);
+      if (hits.length > 0) {
+        peakElev = hits[0].point.y;
+      }
+    }
+
+    return Math.max(hallElev, mountainElev, peakElev);
   }, [calculateMountainHeight]);
 
   // Tea Courtyards & 4 Chairs each:
@@ -421,7 +440,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         finalAction = 'poheng';
         hotspotId = 'walking';
         queue.push(new THREE.Vector3(32, 0.0, -18));
-        queue.push(new THREE.Vector3(54, 0.0, -38));
+        queue.push(new THREE.Vector3(54, 0.0, -34));
         break;
       }
     }
@@ -824,13 +843,13 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     const bambooTrail = builder.buildBambooForestTrail(54, -38);
     scene.add(bambooTrail);
 
-    // Stone Lanterns
+    // Stone Lanterns (offset clear of all stepping-stone paths & hall entrances)
     const lanternPositions = [
       [-8, 16], [8, 16],
       [-14, -12], [14, -12],
-      [-24, 0], [24, 0],
-      [0, -28],
-      [-22, 28], [22, 28],
+      [-26, -7.5], [26, -7.5],
+      [-10.5, -28.5],
+      [-26, 22], [26, 22],
     ];
     lanternPositions.forEach(([lx, lz]) => {
       const lantern = builder.buildStoneLantern(lx, lz);
@@ -839,6 +858,8 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
 
     hotspotsRef.current = builder.hotspots;
     collisionBoxesRef.current = builder.collisionBoxes;
+    mountainMeshesRef.current = builder.mountainMeshes;
+    playerPos.current.y = getSurfaceElevation(playerPos.current.x, playerPos.current.z, currentTempleId);
 
     // 8. Ambient Practitioners & Live Connected Remote Players (최대 100명 동시 접속 도반)
     const otherPractitioners = new OtherPractitionersManager();
@@ -1011,7 +1032,8 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
         raycaster.setFromCamera(mouse, camera);
-        const intersects = raycaster.intersectObject(groundMeshRef.current);
+        const raycastTargets: THREE.Object3D[] = [groundMeshRef.current, ...mountainMeshesRef.current];
+        const intersects = raycaster.intersectObjects(raycastTargets, false);
 
         if (intersects.length > 0) {
           const hit = intersects[0].point;
@@ -1029,9 +1051,9 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
           setIsAutoWalking(false);
           setAutoWalkMessage(null);
 
-          // Target clamped within 4x bounds
-          const targetX = THREE.MathUtils.clamp(hit.x, -120, 120);
-          const targetZ = THREE.MathUtils.clamp(hit.z, -120, 120);
+          // Target clamped within terrain & mountain peaks bounds
+          const targetX = THREE.MathUtils.clamp(hit.x, -145, 145);
+          const targetZ = THREE.MathUtils.clamp(hit.z, -145, 145);
           const targetY = getSurfaceElevation(targetX, targetZ, currentTempleId);
 
           playerTargetPos.current.set(targetX, targetY, targetZ);
@@ -1278,13 +1300,16 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
         avatarRef.current?.setAction('idle');
       }
 
-      playerPos.current.x = THREE.MathUtils.clamp(playerPos.current.x, -120, 120);
-      playerPos.current.z = THREE.MathUtils.clamp(playerPos.current.z, -120, 120);
+      playerPos.current.x = THREE.MathUtils.clamp(playerPos.current.x, -145, 145);
+      playerPos.current.z = THREE.MathUtils.clamp(playerPos.current.z, -145, 145);
 
-      // SURFACE ELEVATION TRACKING (마루 위로 걷기 & 언덕/산 능선 위로 걷기)
-      // Smoothly lifts the practitioner onto raised floors and hill terrain slopes so they never sink!
+      // SURFACE ELEVATION TRACKING (마루 위로 걷기 & 언덕/산 봉우리 위로 걷기)
+      // Smoothly lifts the practitioner onto raised floors and mountain slopes without sinking!
       const currentSurfaceY = getSurfaceElevation(playerPos.current.x, playerPos.current.z, currentTempleId);
-      playerPos.current.y = THREE.MathUtils.damp(playerPos.current.y, currentSurfaceY, 16, delta);
+      const dampedY = THREE.MathUtils.damp(playerPos.current.y, currentSurfaceY, 20, delta);
+      playerPos.current.y = currentSurfaceY > playerPos.current.y
+        ? Math.max(dampedY, currentSurfaceY - 0.05)
+        : dampedY;
       avatar.mesh.position.y = playerPos.current.y;
 
       playerCurrentRotation.current = THREE.MathUtils.damp(
@@ -1413,6 +1438,7 @@ export const MetaverseScene: React.FC<MetaverseSceneProps> = ({
     return () => {
       avatarRef.current = null;
       remotePlayersRef.current = null;
+      mountainMeshesRef.current = [];
       cancelAnimationFrame(frameId);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('pointermove', handlePointerMove);

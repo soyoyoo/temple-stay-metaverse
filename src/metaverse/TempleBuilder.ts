@@ -83,6 +83,7 @@ export class TempleBuilder {
 
   public hotspots: InteractiveHotspot[] = [];
   public collisionBoxes: CollisionBox[] = [];
+  public mountainMeshes: THREE.Mesh[] = [];
 
   /**
    * Builds the Expansive Calming Green Lawn Courtyard (4배 넓어진 푸른 잔디 마당)
@@ -363,12 +364,11 @@ export class TempleBuilder {
     steps.receiveShadow = true;
     hall.add(steps);
 
-    // 2. Pillars
+    // 2. Pillars (keep wide center entrance and symmetric back span unobstructed)
     const pillarGeo = new THREE.CylinderGeometry(0.45, 0.5, 7.5, 16);
     const coords = [
       [-12, -14], [0, -14], [12, -14],
       [-12, 14], [0, 14], [12, 14],
-      [-12, 0], [12, 0],
     ];
     coords.forEach(([cx, cz]) => {
       const p = new THREE.Mesh(pillarGeo, this.pillarMat);
@@ -479,12 +479,11 @@ export class TempleBuilder {
     steps.receiveShadow = true;
     hall.add(steps);
 
-    // Pillars
+    // Pillars (keep wide center entrance and symmetric back span unobstructed)
     const pillarGeo = new THREE.CylinderGeometry(0.45, 0.5, 7.5, 16);
     const coords = [
       [-12, -14], [0, -14], [12, -14],
       [-12, 14], [0, 14], [12, 14],
-      [-12, 0], [12, 0],
     ];
     coords.forEach(([cx, cz]) => {
       const p = new THREE.Mesh(pillarGeo, this.pillarMat);
@@ -765,10 +764,10 @@ export class TempleBuilder {
     const trail = new THREE.Group();
     trail.position.set(x, 0, z);
 
-    // Wide Stone Path (폭 4.5m, 길이 60m)
-    const pathGeo = new THREE.BoxGeometry(4.5, 0.06, 60);
+    // Wide Stone Path (폭 4.5m, 길이 44m -> world z: [-66, -22], clear north of 108 Bows Hall z=-17)
+    const pathGeo = new THREE.BoxGeometry(4.5, 0.06, 44);
     const path = new THREE.Mesh(pathGeo, this.stoneMat);
-    path.position.set(0, 0.03, 0);
+    path.position.set(0, 0.03, -6);
     path.receiveShadow = true;
     trail.add(path);
 
@@ -778,7 +777,7 @@ export class TempleBuilder {
     leafGeo.scale(1.6, 0.6, 1.6);
     const leafMat = new THREE.MeshStandardMaterial({ color: 0x2e6633, roughness: 0.7 });
 
-    for (let i = -28; i <= 28; i += 2.2) {
+    for (let i = -28; i <= 14; i += 2.2) {
       // Left side bamboo grove
       const stalkL = new THREE.Mesh(bambooStalkGeo, bambooMat);
       stalkL.position.set(-3.5 - Math.random() * 4.5, 4.75, i + (Math.random() - 0.5));
@@ -908,7 +907,7 @@ export class TempleBuilder {
     const peaks = [
       { x: 0, z: -115, r: 60, h: 75 },
       { x: -105, z: -70, r: 55, h: 68 },
-      { x: 105, z: -70, r: 55, h: 66 },
+      { x: 122, z: -85, r: 55, h: 66 },
       { x: -110, z: 45, r: 50, h: 60 },
       { x: 110, z: 45, r: 50, h: 58 },
       { x: 0, z: 120, r: 65, h: 65 },
@@ -919,7 +918,10 @@ export class TempleBuilder {
       peakGeo.scale(1.2, 1, 0.9);
       const peak = new THREE.Mesh(peakGeo, rockMat);
       peak.position.set(x, h / 2 - 2, z);
+      peak.receiveShadow = true;
+      peak.updateMatrixWorld(true);
       env.add(peak);
+      this.mountainMeshes.push(peak);
     });
 
     for (let i = 0; i < 36; i++) {
